@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#07111f">
+<title>BVB Trading Assistant</title>
+<style>
+:root{--bg:#07111f;--panel:#101c2d;--line:#263a53;--text:#f4f7fb;--muted:#9eb1c7;--green:#42d99b;--red:#ff7070;--yellow:#ffd166;--blue:#69a7ff;--purple:#b693ff}
+*{box-sizing:border-box}body{margin:0;background:linear-gradient(#06101c,#091523);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.wrap{max-width:1140px;margin:auto;padding:22px 18px 60px}h1{margin:0;font-size:clamp(28px,5vw,40px)}.sub{color:var(--muted);margin:5px 0 18px}
+.row{display:flex;gap:9px;flex-wrap:wrap;margin-bottom:10px}input,select,button{font-size:16px;border-radius:11px;border:1px solid var(--line);padding:12px 14px;background:#122036;color:#fff}
+input.symbol{width:110px;text-transform:uppercase}input.key{flex:1;min-width:240px}button{background:#2364d8;font-weight:800}button.alt{background:#14243a}
+.status{background:#0e1a2a;border:1px solid var(--line);border-radius:11px;padding:11px;margin:12px 0;color:#c5d2df;line-height:1.4}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:11px}
+.card{background:#101c2d;border:1px solid var(--line);border-radius:15px;padding:15px}.full{grid-column:1/-1}.double{grid-column:span 2}
+.label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}.value{font-size:26px;font-weight:850;margin-top:5px}.small{font-size:13px;color:var(--muted);margin-top:5px}
+.pos{color:var(--green)}.neg{color:var(--red)}.warn{color:var(--yellow)}.badge{display:inline-block;margin-top:8px;padding:6px 10px;border-radius:999px;background:#172a43;font-size:12px;font-weight:800}
+.meter{height:9px;border:1px solid var(--line);background:#07111f;border-radius:999px;overflow:hidden;margin-top:9px}.fill{height:100%;width:0;background:linear-gradient(90deg,var(--green),var(--blue))}
+canvas{width:100%;height:350px;display:block;background:#091525;border-radius:11px}.patterns,.tradegrid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px}
+.pattern,.tradebox{background:#091727;border:1px solid var(--line);border-radius:10px;padding:11px}.pattern{text-align:center}.pattern b{display:block;font-size:21px;margin-top:4px}
+.tradebox .big{font-size:21px;font-weight:850;margin-top:4px}.tabs{display:flex;gap:8px;margin-bottom:9px}.tab{background:#14243a}.tab.active{background:#2364d8}
+.signal{font-size:30px;font-weight:900;margin-top:6px}ul{padding-left:20px;margin-bottom:0}li{margin:7px 0;line-height:1.4}
+.notice{font-size:12px;color:var(--muted);line-height:1.5;background:#0b1727;border:1px dashed #36506f}
+@media(max-width:900px){.grid{grid-template-columns:repeat(2,1fr)}.double{grid-column:1/-1}.tradegrid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:520px){.grid{grid-template-columns:1fr}.full,.double{grid-column:1}.patterns,.tradegrid{grid-template-columns:repeat(2,1fr)}canvas{height:290px}}
+</style>
+</head>
+<body><div class="wrap">
+<h1>BVB Trading Assistant</h1>
+<div class="sub">Version 2.2.1 • Entry / Exit Planning Assistant — Bug Fix</div>
+
+<div class="row"><input id="apiKey" class="key" type="password" placeholder="Alpha Vantage API key"><button id="saveKeyBtn" class="alt">Save Key</button></div>
+<div class="row">
+<input id="ticker" class="symbol" value="AVGO">
+<select id="bars"><option value="30">30 trading days</option><option value="60">60 trading days</option><option value="100" selected>100 trading days</option></select>
+<button id="realBtn">Analyze Real Data</button><button id="sampleBtn" class="alt">Sample Mode</button>
+</div>
+<div id="status" class="status">Ready.</div>
+
+<div class="grid">
+<div class="card double"><div class="label">Stock</div><div class="value"><span id="symbol">AVGO</span> <span id="price">$—</span></div><div id="change" class="small">No data</div><div id="sourceBadge" class="badge">NO DATA</div></div>
+<div class="card"><div class="label">Trend</div><div id="trend" class="value">—</div><div id="trendDetail" class="small">Waiting</div></div>
+<div class="card"><div class="label">RSI 14</div><div id="rsi" class="value">—</div><div id="rsiState" class="small">Momentum</div></div>
+
+<div class="card"><div class="label">Setup Signal</div><div id="setupSignal" class="signal">WAIT</div><div id="setupReason" class="small">Waiting</div></div>
+<div class="card"><div class="label">Trend Strength</div><div id="strength" class="value">—</div><div class="meter"><div id="strengthFill" class="fill"></div></div></div>
+<div class="card"><div class="label">Trend Maturity</div><div id="maturity" class="value">—</div><div class="meter"><div id="maturityFill" class="fill"></div></div><div id="age" class="small">—</div></div>
+<div class="card"><div class="label">20-Day Extension</div><div id="extension" class="value">—</div><div id="extensionDetail" class="small">Distance from 20DMA</div></div>
+
+<div class="card"><div class="label">Structure Event</div><div id="event" class="value">—</div><div id="eventDetail" class="small">No event</div></div>
+<div class="card"><div class="label">Active Support</div><div id="support" class="value">—</div></div>
+<div class="card"><div class="label">Active Resistance</div><div id="resistance" class="value">—</div></div>
+<div class="card"><div class="label">Last Broken Resistance</div><div id="brokenResistance" class="value">—</div></div>
+<div class="card"><div class="label">Last Broken Support</div><div id="brokenSupport" class="value">—</div></div>
+
+<div class="card full">
+<div class="label">Entry / Exit Assistant</div>
+<div class="tradegrid">
+<div class="tradebox"><div class="label">Entry Zone</div><div id="entryZone" class="big">—</div><div id="entryDetail" class="small">Planning range</div></div>
+<div class="tradebox"><div class="label">Confirmation</div><div id="confirmation" class="big">—</div><div id="confirmationDetail" class="small">Trigger reference</div></div>
+<div class="tradebox"><div class="label">Invalidation / Stop Ref.</div><div id="stopLevel" class="big">—</div><div id="stopDetail" class="small">Structure invalidation</div></div>
+<div class="tradebox"><div class="label">Target 1</div><div id="target1" class="big">—</div></div>
+<div class="tradebox"><div class="label">Target 2</div><div id="target2" class="big">—</div></div>
+<div class="tradebox"><div class="label">R/R T1</div><div id="rr1" class="big">—</div></div>
+<div class="tradebox"><div class="label">R/R T2</div><div id="rr2" class="big">—</div></div>
+<div class="tradebox"><div class="label">Plan Quality</div><div id="planQuality" class="big">—</div><div id="planDetail" class="small">Structure + extension + R/R</div></div>
+</div></div>
+
+<div class="card full"><div class="tabs"><button id="lineTab" class="tab active">Close Line</button><button id="candleTab" class="tab">Candles</button></div><canvas id="chart"></canvas><div class="small">Green dots = swing lows • Red dots = swing highs • Purple dashed = 20-day average</div></div>
+
+<div class="card double"><div class="label">Market Structure</div><div class="patterns">
+<div class="pattern">Higher Highs<b id="hh">0</b></div><div class="pattern">Higher Lows<b id="hl">0</b></div><div class="pattern">Lower Highs<b id="lh">0</b></div><div class="pattern">Lower Lows<b id="ll">0</b></div>
+</div></div>
+<div class="card double"><div class="label">Trade Plan Readout</div><ul id="notes"><li>Load data to begin.</li></ul></div>
+<div class="card full notice">Educational planning tool only. Generated entry, stop-reference, and target levels are based on recent price structure and volatility and are not guarantees of execution or future price movement.</div>
+</div></div>
+
+<script>
+var candles=[],chartMode="line",sourceMode="none";
+function E(id){return document.getElementById(id)}
+function last(a){return a[a.length-1]}
+function money(v){return (v===null||v===undefined||!isFinite(v))?"—":"$"+v.toFixed(2)}
+function rr(v){return (v===null||!isFinite(v)||v<=0)?"—":v.toFixed(2)+":1"}
+function setStatus(t){E("status").innerHTML=t}
+
+function saveKey(){var k=E("apiKey").value.trim();if(!k){setStatus("Enter an API key first.");return}try{localStorage.setItem("bvb_alpha_key",k)}catch(e){}setStatus("API key saved.")}
+function restoreKey(){try{var k=localStorage.getItem("bvb_alpha_key");if(k)E("apiKey").value=k}catch(e){}}
+
+function sampleData(){
+ var n=parseInt(E("bars").value,10),p=200+Math.random()*70,d=(Math.random()-.48)*1.1;candles=[];var now=new Date();
+ for(var i=0;i<n;i++){if(i>0&&i%18===0)d+=(Math.random()-.5)*1.2;d*=.965;var o=p+(Math.random()-.5)*1.2,c=Math.max(10,o+d+Math.sin(i/7)*.55+(Math.random()-.5)*3),h=Math.max(o,c)+Math.random()*1.7,l=Math.min(o,c)-Math.random()*1.7;p=c;var dt=new Date(now.getTime()-(n-1-i)*86400000);candles.push({date:dt.toISOString().slice(0,10),open:o,high:h,low:l,close:c,volume:1000000+Math.random()*5000000})}
+ sourceMode="sample";analyze();setStatus("Sample data loaded.")
+}
+
+async function loadReal(){
+ var key=E("apiKey").value.trim(),ticker=(E("ticker").value||"AVGO").trim().toUpperCase();E("ticker").value=ticker;E("symbol").textContent=ticker;
+ if(!key){setStatus("Real data needs an Alpha Vantage API key.");return}
+ try{localStorage.setItem("bvb_alpha_key",key)}catch(e){}
+ E("realBtn").disabled=true;setStatus("Loading real daily data for <b>"+ticker+"</b>…");
+ try{
+  var cacheKey="bvb_cache_"+ticker,cached=null;try{cached=JSON.parse(localStorage.getItem(cacheKey)||"null")}catch(e){}
+  var now=Date.now(),wanted=parseInt(E("bars").value,10);
+  if(cached&&now-cached.savedAt<900000&&cached.candles&&cached.candles.length){
+   candles=cached.candles.slice(-wanted);sourceMode="real";analyze();setStatus("Using cached real data for <b>"+ticker+"</b>. Latest bar: "+last(candles).date+".");E("realBtn").disabled=false;return
+  }
+  var url="https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol="+encodeURIComponent(ticker)+"&outputsize=compact&apikey="+encodeURIComponent(key);
+  var r=await fetch(url);if(!r.ok)throw new Error("HTTP "+r.status);var data=await r.json();
+  if(data["Error Message"])throw new Error("Ticker or request not accepted.");if(data["Note"])throw new Error("API request limit reached.");if(data["Information"])throw new Error(data["Information"]);
+  var s=data["Time Series (Daily)"];if(!s)throw new Error("No daily data returned.");
+  var dates=Object.keys(s).sort(),all=[];
+  for(var i=0;i<dates.length;i++){var x=s[dates[i]];all.push({date:dates[i],open:+x["1. open"],high:+x["2. high"],low:+x["3. low"],close:+x["4. close"],volume:+x["5. volume"]})}
+  try{localStorage.setItem(cacheKey,JSON.stringify({savedAt:now,candles:all}))}catch(e){}
+  candles=all.slice(-wanted);sourceMode="real";analyze();setStatus("Real daily data loaded for <b>"+ticker+"</b>. Latest bar: "+last(candles).date+".")
+ }catch(err){setStatus("<b>Real-data load failed:</b> "+err.message+"<br>Sample Mode is still available.")}
+ E("realBtn").disabled=false
+}
+
+function closes(){var a=[];for(var i=0;i<candles.length;i++)a.push(candles[i].close);return a}
+function smaAt(a,n,end){if(end-n+1<0)return null;var s=0;for(var i=end-n+1;i<=end;i++)s+=a[i];return s/n}
+function RSI(a,n){if(a.length<=n)return 50;var g=0,l=0;for(var i=a.length-n;i<a.length;i++){var d=a[i]-a[i-1];if(d>=0)g+=d;else l-=d}if(l===0)return 100;var q=(g/n)/(l/n);return 100-100/(1+q)}
+function ATR(n){if(candles.length<n+1)return null;var s=0;for(var i=candles.length-n;i<candles.length;i++){var prev=candles[i-1].close;var tr=Math.max(candles[i].high-candles[i].low,Math.abs(candles[i].high-prev),Math.abs(candles[i].low-prev));s+=tr}return s/n}
+function pivots(){var H=[],L=[],r=2;for(var i=r;i<candles.length-r;i++){var hi=true,lo=true;for(var j=i-r;j<=i+r;j++){if(j===i)continue;if(candles[i].high<=candles[j].high)hi=false;if(candles[i].low>=candles[j].low)lo=false}if(hi)H.push({i:i,p:candles[i].high});if(lo)L.push({i:i,p:candles[i].low})}return{highs:H,lows:L}}
+function classify(p){var c={hh:0,hl:0,lh:0,ll:0};for(var i=1;i<p.highs.length;i++){if(p.highs[i].p>p.highs[i-1].p)c.hh++;else c.lh++}for(i=1;i<p.lows.length;i++){if(p.lows[i].p>p.lows[i-1].p)c.hl++;else c.ll++}return c}
+function nearestAbove(swings,price){var b=null;for(var i=0;i<swings.length;i++)if(swings[i].p>price&&(b===null||swings[i].p<b.p))b=swings[i];return b}
+function nearestBelow(swings,price){var b=null;for(var i=0;i<swings.length;i++)if(swings[i].p<price&&(b===null||swings[i].p>b.p))b=swings[i];return b}
+function mostRecentBelow(swings,price){for(var i=swings.length-1;i>=0;i--)if(swings[i].p<price)return swings[i];return null}
+function mostRecentAbove(swings,price){for(var i=swings.length-1;i>=0;i--)if(swings[i].p>price)return swings[i];return null}
+
+function analyze(){
+ try{
+  if(candles.length<20)throw new Error("Not enough data to analyze.");
+  var a=closes(),p=pivots(),c=classify(p),latest=last(candles),first=candles[0],pct=(latest.close-first.close)/first.close*100;
+  var r=RSI(a,14),atr=ATR(14)||latest.close*.02,ma10=smaAt(a,10,a.length-1),ma20=smaAt(a,20,a.length-1);
+  var bull=c.hh+c.hl,bear=c.lh+c.ll,total=Math.max(1,bull+bear),br=bull/total,sr=bear/total,trend="Mixed",trendClass="warn";
+  if(br>=.60&&latest.close>ma20){trend="Bullish";trendClass="pos"}else if(sr>=.60&&latest.close<ma20){trend="Bearish";trendClass="neg"}
+
+  var align=.3;if(trend==="Bullish"&&ma10>ma20)align=1;if(trend==="Bearish"&&ma10<ma20)align=1;
+  var strength=Math.round(Math.min(100,(Math.max(br,sr)*.75+align*.25)*100));
+
+  var merged=[];for(var i=0;i<p.highs.length;i++)merged.push({i:p.highs[i].i});for(i=0;i<p.lows.length;i++)merged.push({i:p.lows[i].i});merged.sort(function(x,y){return x.i-y.i});
+  var age=merged.length?candles.length-1-last(merged).i:0,spacing=merged.length>2?(last(merged).i-merged[0].i)/(merged.length-1):8,maturity=Math.round(Math.min(100,(age/Math.max(3,spacing))*100));
+
+  var activeResistance=nearestAbove(p.highs,latest.close),activeSupport=nearestBelow(p.lows,latest.close),brokenResistance=mostRecentBelow(p.highs,latest.close),brokenSupport=mostRecentAbove(p.lows,latest.close);
+  var latestHigh=p.highs.length?last(p.highs):null,latestLow=p.lows.length?last(p.lows):null,event="NONE",eventClass="warn",eventDetail="Price remains between latest confirmed swing levels.";
+  if(latestHigh&&latest.close>latestHigh.p){event="BREAKOUT";eventClass="pos";eventDetail="Above latest confirmed swing high at "+money(latestHigh.p)+"."}
+  else if(latestLow&&latest.close<latestLow.p){event="BREAKDOWN";eventClass="neg";eventDetail="Below latest confirmed swing low at "+money(latestLow.p)+"."}
+
+  var ext=((latest.close-ma20)/ma20)*100,recentHL=false,recentLH=false;
+  if(p.lows.length>=2)recentHL=last(p.lows).p>p.lows[p.lows.length-2].p;
+  if(p.highs.length>=2)recentLH=last(p.highs).p<p.highs[p.highs.length-2].p;
+
+  var signal="WAIT",signalClass="warn",signalReason="No clean directional setup.";
+  if((trend==="Bullish"||event==="BREAKOUT")&&recentHL&&latest.close>ma20){signal="BULLISH";signalClass="pos";signalReason="Bullish structure + higher low + price above 20DMA."}
+  if((trend==="Bearish"||event==="BREAKDOWN")&&recentLH&&latest.close<ma20){signal="BEARISH";signalClass="neg";signalReason="Bearish structure + lower high + price below 20DMA."}
+  if(Math.abs(ext)>8){signal="WAIT";signalClass="warn";signalReason="Price is highly extended from the 20DMA; setup may be late."}
+
+  // All planning variables are declared before use.
+  var entryLow=null,entryHigh=null,confirm=null,stop=null,t1=null,t2=null,rrOne=null,rrTwo=null,planQuality="WAIT",planDetail="No directional plan.";
+  var entryMid=null,risk=null,base=null;
+
+  if(signal==="BULLISH"){
+    base=activeSupport?activeSupport.p:(latestLow?latestLow.p:ma20);
+    entryHigh=Math.min(latest.close,Math.max(ma20,base+atr*.45));
+    entryLow=Math.min(entryHigh,Math.max(base,entryHigh-atr*.60));
+    confirm=activeResistance?activeResistance.p:(latestHigh?latestHigh.p:latest.close+atr*.5);
+    stop=Math.max(.01,base-atr*.25);
+    entryMid=(entryLow+entryHigh)/2;risk=Math.max(.01,entryMid-stop);
+    t1=Math.max(confirm,entryMid+risk*1.25);
+    t2=Math.max(t1+atr*.5,entryMid+risk*2.0);
+    rrOne=(t1-entryMid)/risk;rrTwo=(t2-entryMid)/risk;
+  }else if(signal==="BEARISH"){
+    base=activeResistance?activeResistance.p:(latestHigh?latestHigh.p:ma20);
+    entryLow=Math.max(latest.close,Math.min(ma20,base-atr*.45));
+    entryHigh=Math.max(entryLow,Math.min(base,entryLow+atr*.60));
+    confirm=activeSupport?activeSupport.p:(latestLow?latestLow.p:latest.close-atr*.5);
+    stop=base+atr*.25;
+    entryMid=(entryLow+entryHigh)/2;risk=Math.max(.01,stop-entryMid);
+    t1=Math.min(confirm,entryMid-risk*1.25);
+    t2=Math.min(t1-atr*.5,entryMid-risk*2.0);
+    rrOne=(entryMid-t1)/risk;rrTwo=(entryMid-t2)/risk;
+  }
+
+  if(signal!=="WAIT"){
+    var score=0;if(strength>=65)score++;if(Math.abs(ext)<=6)score++;if(rrOne!==null&&rrOne>=1.5)score++;if(maturity<90)score++;
+    if(score>=3){planQuality="STRONG";planDetail="Structure and risk/reward are relatively favorable."}
+    else if(score===2){planQuality="MODERATE";planDetail="Usable structure, but caution flags remain."}
+    else{planQuality="WEAK";planDetail="Directional structure exists, but extension/maturity/R:R is less favorable."}
+  }
+
+  E("symbol").textContent=(E("ticker").value||"AVGO").toUpperCase();E("price").textContent=money(latest.close);E("change").textContent=(sourceMode==="real"?"Selected-period":"Sample")+" change: "+(pct>=0?"+":"")+pct.toFixed(2)+"%";E("change").className="small "+(pct>=0?"pos":"neg");E("sourceBadge").textContent=sourceMode==="real"?"REAL DAILY DATA":"SAMPLE DATA";
+  E("trend").textContent=trend;E("trend").className="value "+trendClass;E("trendDetail").textContent=bull+" bullish vs "+bear+" bearish structure points";
+  E("rsi").textContent=r.toFixed(1);E("rsiState").textContent=r>70?"Overbought":r<30?"Oversold":r>55?"Positive momentum":r<45?"Negative momentum":"Neutral";
+  E("setupSignal").textContent=signal;E("setupSignal").className="signal "+signalClass;E("setupReason").textContent=signalReason;
+  E("strength").textContent=strength+"%";E("strengthFill").style.width=strength+"%";E("maturity").textContent=maturity+"%";E("maturityFill").style.width=maturity+"%";E("age").textContent=age+" bars since latest pivot";
+  E("extension").textContent=(ext>=0?"+":"")+ext.toFixed(1)+"%";E("extension").className="value "+(Math.abs(ext)>8?"warn":ext>=0?"pos":"neg");E("extensionDetail").textContent=money(ma20)+" 20DMA";
+  E("event").textContent=event;E("event").className="value "+eventClass;E("eventDetail").textContent=eventDetail;
+  E("support").textContent=activeSupport?money(activeSupport.p):"NONE";E("resistance").textContent=activeResistance?money(activeResistance.p):"NONE";E("brokenResistance").textContent=brokenResistance?money(brokenResistance.p):"—";E("brokenSupport").textContent=brokenSupport?money(brokenSupport.p):"—";
+  E("hh").textContent=c.hh;E("hl").textContent=c.hl;E("lh").textContent=c.lh;E("ll").textContent=c.ll;
+
+  E("entryZone").textContent=entryLow!==null?money(entryLow)+" – "+money(entryHigh):"WAIT";
+  E("entryDetail").textContent=signal==="BULLISH"?"Pullback/retest planning zone.":signal==="BEARISH"?"Bounce/retest planning zone.":"No entry zone until setup improves.";
+  E("confirmation").textContent=confirm!==null?money(confirm):"—";E("confirmationDetail").textContent=signal==="BULLISH"?"Break/hold above strengthens the setup.":signal==="BEARISH"?"Break/hold below strengthens the setup.":"No confirmation trigger.";
+  E("stopLevel").textContent=stop!==null?money(stop):"—";E("stopDetail").textContent=signal!=="WAIT"?"Structure invalidation with ATR buffer.":"No invalidation level.";
+  E("target1").textContent=t1!==null?money(t1):"—";E("target2").textContent=t2!==null?money(t2):"—";E("rr1").textContent=rr(rrOne);E("rr2").textContent=rr(rrTwo);
+  E("planQuality").textContent=planQuality;E("planQuality").className="big "+(planQuality==="STRONG"?"pos":planQuality==="WEAK"?"neg":"warn");E("planDetail").textContent=planDetail;
+
+  var notes=["Setup signal: "+signal+" — "+signalReason];
+  if(signal!=="WAIT"){notes.push("Entry zone: "+money(entryLow)+" to "+money(entryHigh)+".");notes.push("Confirmation: "+money(confirm)+" • Invalidation reference: "+money(stop)+".");notes.push("Target 1: "+money(t1)+" ("+rr(rrOne)+") • Target 2: "+money(t2)+" ("+rr(rrTwo)+").")}
+  if(maturity>=90)notes.push("Trend maturity is very high, which reduces plan quality.");
+  notes.push("Generated levels are planning references, not guarantees.");
+  E("notes").innerHTML=notes.map(function(n){return "<li>"+n+"</li>"}).join("");
+  draw(p)
+ }catch(err){setStatus("<b>Analysis error:</b> "+err.message)}
+}
+
+function draw(p){
+ var cv=E("chart"),rect=cv.getBoundingClientRect(),dpr=window.devicePixelRatio||1;cv.width=Math.floor(rect.width*dpr);cv.height=Math.floor(rect.height*dpr);
+ var ctx=cv.getContext("2d");ctx.setTransform(dpr,0,0,dpr,0,0);var w=rect.width,h=rect.height,L=46,R=18,T=20,B=24,a=closes(),lows=[],highs=[];
+ for(var i=0;i<candles.length;i++){lows.push(candles[i].low);highs.push(candles[i].high)}var min=Math.min.apply(null,lows),max=Math.max.apply(null,highs),range=Math.max(.01,max-min);
+ function X(i){return L+i/(candles.length-1)*(w-L-R)}function Y(v){return h-B-(v-min)/range*(h-T-B)}
+ ctx.clearRect(0,0,w,h);ctx.strokeStyle="#20354e";ctx.font="11px -apple-system";
+ for(var g=0;g<5;g++){var yy=T+g*(h-T-B)/4,val=max-g*range/4;ctx.beginPath();ctx.moveTo(L,yy);ctx.lineTo(w-R,yy);ctx.stroke();ctx.fillStyle="#94a7bd";ctx.fillText("$"+val.toFixed(2),3,yy+4)}
+ if(chartMode==="candle"){var cw=Math.max(2,Math.min(8,(w-L-R)/candles.length*.62));for(i=0;i<candles.length;i++){var c=candles[i],up=c.close>=c.open;ctx.strokeStyle=up?"#42d99b":"#ff7070";ctx.fillStyle=ctx.strokeStyle;ctx.beginPath();ctx.moveTo(X(i),Y(c.high));ctx.lineTo(X(i),Y(c.low));ctx.stroke();var top=Math.min(Y(c.open),Y(c.close)),bot=Math.max(Y(c.open),Y(c.close));ctx.fillRect(X(i)-cw/2,top,cw,Math.max(1,bot-top))}}else{ctx.strokeStyle="#69a7ff";ctx.lineWidth=2;ctx.beginPath();for(i=0;i<a.length;i++){if(i===0)ctx.moveTo(X(i),Y(a[i]));else ctx.lineTo(X(i),Y(a[i]))}ctx.stroke()}
+ ctx.setLineDash([6,5]);ctx.strokeStyle="#b693ff";ctx.lineWidth=1.3;ctx.beginPath();var started=false;for(i=0;i<a.length;i++){var m=smaAt(a,20,i);if(m===null)continue;if(!started){ctx.moveTo(X(i),Y(m));started=true}else ctx.lineTo(X(i),Y(m))}ctx.stroke();ctx.setLineDash([]);
+ ctx.fillStyle="#ff7070";for(i=0;i<p.highs.length;i++){ctx.beginPath();ctx.arc(X(p.highs[i].i),Y(p.highs[i].p),4,0,Math.PI*2);ctx.fill()}
+ ctx.fillStyle="#42d99b";for(i=0;i<p.lows.length;i++){ctx.beginPath();ctx.arc(X(p.lows[i].i),Y(p.lows[i].p),4,0,Math.PI*2);ctx.fill()}
+}
+function setChart(m){chartMode=m;E("lineTab").className="tab "+(m==="line"?"active":"");E("candleTab").className="tab "+(m==="candle"?"active":"");if(candles.length)draw(pivots())}
+
+E("saveKeyBtn").onclick=saveKey;E("realBtn").onclick=loadReal;E("sampleBtn").onclick=sampleData;E("lineTab").onclick=function(){setChart("line")};E("candleTab").onclick=function(){setChart("candle")};E("bars").onchange=function(){if(sourceMode==="sample")sampleData()};
+window.onload=function(){restoreKey();sampleData()};window.onresize=function(){if(candles.length)draw(pivots())};
+</script>
+</body></html>
