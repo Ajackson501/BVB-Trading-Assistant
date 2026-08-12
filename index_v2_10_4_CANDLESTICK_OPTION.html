@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#07111f">
+<title>BVB Trading Assistant v2.10.2</title>
+<style>
+:root{--bg:#07111f;--panel:#101c2d;--panel2:#091727;--line:#263a53;--text:#f4f7fb;--muted:#9eb1c7;--green:#42d99b;--red:#ff7070;--yellow:#ffd166;--blue:#69a7ff;--purple:#b693ff;--cyan:#7dd3fc}
+*{box-sizing:border-box}body{margin:0;background:linear-gradient(#06101c,#091523);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.wrap{max-width:1380px;margin:auto;padding:10px 12px 24px}h1{font-size:30px;line-height:1;margin:0}.sub{font-size:11px;color:var(--muted);margin:3px 0 7px}.row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:5px;align-items:center}input,select,button{font:inherit;font-size:13px;border-radius:8px;border:1px solid var(--line);padding:8px 10px;background:#122036;color:#fff;min-height:36px}input.symbol{width:90px;text-transform:uppercase}input.key{flex:1;min-width:220px}.maInput{width:112px}.maControls{display:flex;gap:5px;align-items:center;flex-wrap:wrap}.maHint{font-size:9px;color:var(--muted)}button{background:#2364d8;font-weight:850}button.alt{background:#14243a}button:disabled{opacity:.55}.controls{display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1}.statusStrip{display:grid;grid-template-columns:repeat(4,minmax(76px,1fr));gap:4px;margin-left:auto;min-width:330px}.chip{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:5px 7px;min-height:36px}.label{font-size:8.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}.chip strong{display:block;font-size:11px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.status{font-size:11px;color:#c5d2df;background:#0e1a2a;border:1px solid var(--line);border-radius:8px;padding:6px 9px;margin:4px 0 6px}.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:7px 9px}.command{border-color:#3a587a;background:linear-gradient(180deg,#11233a,#0b1929)}.cardHead{display:flex;justify-content:space-between;gap:8px;align-items:center}.miniBtn{min-height:27px;padding:4px 7px;font-size:10px;background:#14243a}.commandGrid{display:grid;grid-template-columns:1.15fr repeat(7,minmax(0,1fr));gap:4px;margin-top:4px}.box{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 7px;min-width:0}.hero{display:flex;flex-direction:column;justify-content:center}.decision{font-size:22px;font-weight:950;line-height:1.02;margin-top:2px}.big{font-size:14px;font-weight:850;line-height:1.08;margin-top:2px;overflow-wrap:anywhere}.mini{font-size:9.5px;color:var(--muted);line-height:1.14;margin-top:2px}.pos{color:var(--green)!important}.neg{color:var(--red)!important}.warn{color:var(--yellow)!important}.info{color:var(--blue)!important}.stagePath{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-top:5px}.stage{border:1px solid var(--line);border-radius:999px;padding:4px;text-align:center;font-size:9px;font-weight:850;color:var(--muted)}.stage.active{background:#2364d8;border-color:#2364d8;color:#fff}.stage.bad{background:#7c2a2a;border-color:#7c2a2a;color:#fff}.meter{height:5px;border:1px solid var(--line);background:#06101c;border-radius:999px;overflow:hidden;margin-top:4px}.fill{height:100%;width:0;background:linear-gradient(90deg,var(--yellow),var(--green))}.details{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin-top:6px}.detailCard{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:7px}.detailCard .big{font-size:15px}.evidence{grid-column:span 2}.evidenceList{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:3px 8px;margin-top:4px}.evidenceItem{font-size:10px;color:#d5dfeb}.evidenceItem span{color:var(--muted)}.chartCard{margin-top:6px}.chartTop{display:flex;justify-content:space-between;gap:6px;align-items:center;flex-wrap:wrap}.chartTools{display:flex;gap:5px;align-items:center;flex-wrap:wrap}.chartMode{min-height:25px;padding:3px 7px;font-size:9px;background:#14243a}.chartMode.active{background:#2364d8;border-color:#2364d8;color:#fff}.legend{display:flex;gap:5px;flex-wrap:wrap}.legend span{font-size:9px;color:var(--muted);border:1px solid var(--line);padding:3px 6px;border-radius:6px}.sw{display:inline-block;width:12px;height:6px;border-radius:2px;margin-right:4px}.sw.sup{background:rgba(125,211,252,.45)}.sw.res{background:rgba(248,113,113,.42)}.sw.fib{background:rgba(182,147,255,.55)}canvas{width:100%;height:245px;display:block;background:#091525;border-radius:8px;margin-top:5px}.footer{font-size:9.5px;color:var(--muted);line-height:1.25;margin-top:6px}.hidden{display:none!important}.collapsed .details,.collapsed .chartCard{display:none}.lock{font-weight:900}.lock.pass{color:var(--green)}.lock.fail{color:var(--red)}
+@media(max-width:1100px){.statusStrip{width:100%;margin-left:0}.commandGrid{grid-template-columns:repeat(4,minmax(0,1fr))}.hero{grid-column:span 2}.details{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:700px){.wrap{padding:8px}.commandGrid{grid-template-columns:repeat(2,minmax(0,1fr))}.hero{grid-column:1/-1}.details{grid-template-columns:1fr}.evidence{grid-column:auto}.evidenceList{grid-template-columns:1fr}.statusStrip{grid-template-columns:repeat(2,1fr)}canvas{height:260px}h1{font-size:25px}}
+</style>
+</head>
+<body>
+<div class="wrap" id="app">
+<h1>BVB Trading Assistant</h1>
+<div class="sub">Version 2.10.4 • 200 SMA Chart Reference • 200 SMA → Structure → Confirm → Trigger → Quality → 2R</div>
+
+<div class="row">
+  <input id="apiKey" class="key" type="password" placeholder="Alpha Vantage API key">
+  <button id="saveKeyBtn" class="alt">Save Key</button>
+</div>
+<div class="row">
+  <div class="maControls">
+    <input id="manual200" class="maInput" type="number" step="0.01" inputmode="decimal" placeholder="200 SMA">
+    <input id="prior200" class="maInput" type="number" step="0.01" inputmode="decimal" placeholder="200 SMA 20d ago">
+    <button id="save200Btn" class="alt">Save 200 SMA</button>
+    <span id="maInputHint" class="maHint">Optional manual 1D values. 20 SMA is automatic.</span>
+  </div>
+</div>
+<div class="row">
+  <div class="controls">
+    <input id="ticker" class="symbol" value="NVDA" aria-label="Ticker">
+    <select id="bars"><option value="30">30 days</option><option value="60">60 days</option><option value="100" selected>100 days</option></select>
+    <button id="realBtn">Analyze Real Data</button>
+    <button id="sampleBtn" class="alt">Sample Mode</button>
+  </div>
+  <div class="statusStrip">
+    <div class="chip"><div class="label">Market</div><strong id="marketStatus">—</strong></div>
+    <div class="chip"><div class="label">Through</div><strong id="dataThrough">—</strong></div>
+    <div class="chip"><div class="label">Source</div><strong id="dataSource">—</strong></div>
+    <div class="chip"><div class="label">Refresh</div><strong id="lastRefresh">—</strong></div>
+  </div>
+</div>
+<div id="status" class="status">Ready. Sample Mode works immediately.</div>
+
+<div class="card command" id="commandCard">
+  <div class="cardHead"><div class="label">Trader Command Center</div><button id="detailsBtn" class="miniBtn">Hide Details</button></div>
+  <div class="commandGrid">
+    <div class="box hero">
+      <div class="label">Decision</div><div id="decision" class="decision warn">WAIT</div>
+      <div id="decisionWhy" class="mini">Waiting for analysis.</div>
+      <div class="stagePath"><div id="stageWatch" class="stage">WATCH</div><div id="stageArmed" class="stage">ARMED</div><div id="stageTrade" class="stage">TRADE</div><div id="stageInvalid" class="stage">INVALID</div></div>
+    </div>
+    <div class="box"><div class="label">Price</div><div id="price" class="big">$—</div><div id="change" class="mini">—</div></div>
+    <div class="box"><div class="label">Structure</div><div id="structure" class="big">—</div><div id="structureSeq" class="mini">—</div></div>
+    <div class="box"><div class="label">Setup</div><div id="setup" class="big">—</div><div id="setupDetail" class="mini">—</div></div>
+    <div class="box"><div class="label">Trigger</div><div id="trigger" class="big">—</div><div id="triggerDetail" class="mini">—</div></div>
+    <div class="box"><div class="label">Entry</div><div id="entry" class="big">$—</div><div id="entryDetail" class="mini">Ideal entry</div></div>
+    <div class="box"><div class="label">Stop</div><div id="stop" class="big">$—</div><div id="invalid" class="mini">Invalidation —</div></div>
+    <div class="box"><div class="label">2R Gate</div><div id="rr" class="big">—</div><div id="rrGate" class="mini lock">Waiting</div></div>
+  </div>
+  <div class="details" id="details">
+    <div class="detailCard"><div class="label">Target</div><div id="target" class="big">$—</div><div id="targetDetail" class="mini">2R objective</div></div>
+    <div class="detailCard"><div class="label">Location</div><div id="location" class="big">—</div><div id="levels" class="mini">Support / resistance</div></div>
+    <div class="detailCard"><div class="label">Fibonacci</div><div id="fib" class="big">—</div><div id="fibDetail" class="mini">No active confluence</div></div>
+    <div class="detailCard"><div class="label">Trade Quality</div><div id="quality" class="big">—</div><div class="meter"><div id="qualityFill" class="fill"></div></div><div id="qualityDetail" class="mini">0 / 9</div></div>
+    <div class="detailCard evidence"><div class="label">Why</div><div id="evidenceList" class="evidenceList"></div></div>
+    <div class="detailCard"><div class="label">Don't Chase</div><div id="chase" class="big">—</div><div id="chaseDetail" class="mini">Entry discipline</div></div>
+    <div class="detailCard"><div class="label">Momentum</div><div id="momentum" class="big">—</div><div id="momentumDetail" class="mini">RSI / extension</div></div>
+    <div class="detailCard"><div class="label">Long-Term Regime</div><div id="regime" class="big">—</div><div id="regimeDetail" class="mini">200 SMA unavailable</div></div>
+  </div>
+</div>
+
+<div class="card chartCard" id="chartCard">
+  <div class="chartTop"><div class="label">Price Structure Chart</div><div class="chartTools"><button id="lineModeBtn" class="chartMode active" type="button">Line</button><button id="candleModeBtn" class="chartMode" type="button">Candles</button><div class="legend"><span><i class="sw sup"></i>Support</span><span><i class="sw res"></i>Resistance</span><span><i class="sw fib"></i>Fib confluence</span></div></div></div>
+  <canvas id="chart"></canvas>
+</div>
+<div class="footer">Educational decision-support tool only. The app prioritizes market structure and location, then setup and trigger, and only permits a TRADE state after structure confirmation, a minimum quality score, and estimated reward/risk of at least 2:1. The 20 SMA is calculated automatically. A true daily 200 SMA can be entered manually when the data feed does not provide 200 closes; the app labels its source, never substitutes a shorter average as a fake 200 SMA, and plots a horizontal manual 200-SMA reference line on either chart view when supplied. The chart can switch between the default close-price line and daily OHLC candlesticks. Historical setup behavior remains a small background input.</div>
+</div>
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+const fmt=n=>Number.isFinite(n)?'$'+n.toFixed(2):'$—';
+const pct=n=>Number.isFinite(n)?(n>=0?'+':'')+n.toFixed(2)+'%':'—';
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+let lastBars=[]; let lastAnalysis=null; let chartMode=localStorage.getItem('bvb_chart_mode')==='candles'?'candles':'line';
+
+function setStatus(t){$('status').textContent=t}
+function nowStamp(){return new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}
+function marketEstimate(){const d=new Date();const day=d.getDay(), mins=d.getHours()*60+d.getMinutes();return (day>=1&&day<=5&&mins>=570&&mins<960)?'OPEN*':'CLOSED*'}
+function mean(a){const v=a.filter(Number.isFinite);return v.length?v.reduce((x,y)=>x+y,0)/v.length:NaN}
+function sma(vals,n,i=vals.length-1){if(i-n+1<0)return NaN;return mean(vals.slice(i-n+1,i+1))}
+function trueRange(b,p){return Math.max(b.h-b.l,Math.abs(b.h-p),Math.abs(b.l-p))}
+function atr(bars,n=14){if(bars.length<n+1)return NaN;const arr=[];for(let i=1;i<bars.length;i++)arr.push(trueRange(bars[i],bars[i-1].c));return mean(arr.slice(-n))}
+function rsi(vals,n=14){if(vals.length<n+1)return NaN;let g=0,l=0;for(let i=vals.length-n;i<vals.length;i++){const d=vals[i]-vals[i-1];if(d>0)g+=d;else l-=d}if(l===0)return 100;const rs=(g/n)/(l/n);return 100-100/(1+rs)}
+function swingPoints(bars,w=2){const highs=[],lows=[];for(let i=w;i<bars.length-w;i++){let hi=true,lo=true;for(let j=i-w;j<=i+w;j++){if(j===i)continue;if(bars[j].h<=bars[i].h)hi=false;if(bars[j].l>=bars[i].l)lo=false}if(hi)highs.push({i,p:bars[i].h,d:bars[i].d});if(lo)lows.push({i,p:bars[i].l,d:bars[i].d})}return{highs,lows}}
+function nearestBelow(arr,p,fallback){const x=arr.filter(v=>v.p<p).sort((a,b)=>b.i-a.i)[0];return x?x.p:fallback}
+function nearestAbove(arr,p,fallback){const x=arr.filter(v=>v.p>p).sort((a,b)=>b.i-a.i)[0];return x?x.p:fallback}
+function structureInfo(sw){const hs=sw.highs.slice(-2),ls=sw.lows.slice(-2);let type='MIXED',seq=[];if(hs.length===2)seq.push(hs[1].p>hs[0].p?'HH':'LH');if(ls.length===2)seq.push(ls[1].p>ls[0].p?'HL':'LL');if(seq.includes('HH')&&seq.includes('HL'))type='BULLISH';else if(seq.includes('LH')&&seq.includes('LL'))type='BEARISH';else if(seq.includes('HH')&&seq.includes('LL'))type='EXPANDING';else if(seq.includes('LH')&&seq.includes('HL'))type='COMPRESSION';return{type,seq:seq.join(' → ')||'Insufficient swings',hs,ls}}
+function fibContext(sw,price,a){let out={label:'—',detail:'No active confluence',level:NaN,near:false};if(!sw.highs.length||!sw.lows.length)return out;const h=sw.highs[sw.highs.length-1],l=sw.lows[sw.lows.length-1];let low,high,dir;if(l.i<h.i){low=l.p;high=h.p;dir='UP'}else{low=l.p;high=h.p;dir='DOWN'}const range=high-low;if(range<=0)return out;const levels=dir==='UP'?[high-.382*range,high-.5*range,high-.618*range]:[low+.382*range,low+.5*range,low+.618*range];const names=['38.2%','50%','61.8%'];let k=0;for(let i=1;i<3;i++)if(Math.abs(price-levels[i])<Math.abs(price-levels[k]))k=i;const dist=Math.abs(price-levels[k]);out={label:names[k],detail:`${names[k]} at ${fmt(levels[k])}`,level:levels[k],near:Number.isFinite(a)&&dist<=a*.45,dir};return out}
+function backgroundHistory(bars,direction){if(bars.length<45)return .5;const closes=bars.map(b=>b.c);let wins=0,total=0;for(let i=20;i<bars.length-5;i++){const s20=sma(closes,20,i),s5=sma(closes,5,i);if(!Number.isFinite(s20)||!Number.isFinite(s5))continue;const bull=s5>s20&&closes[i]>s20,bear=s5<s20&&closes[i]<s20;if((direction==='LONG'&&bull)||(direction==='SHORT'&&bear)){total++;const future=closes[i+5]-closes[i];if((direction==='LONG'&&future>0)||(direction==='SHORT'&&future<0))wins++}}return total?wins/total:.5}
+function regimeStorageKey(sym){return 'bvb_200sma_'+String(sym||'').toUpperCase()}
+function getManual200(sym){try{const raw=localStorage.getItem(regimeStorageKey(sym));if(!raw)return null;const x=JSON.parse(raw);if(!x||!Number.isFinite(+x.current)||+x.current<=0)return null;const hasPrior=x.prior!==null&&x.prior!==''&&Number.isFinite(+x.prior)&&+x.prior>0;return{current:+x.current,prior:hasPrior?+x.prior:NaN,saved:x.saved||''}}catch(_){return null}}
+function setManual200(sym,current,prior){if(!sym)return;const data={current:+current,prior:Number.isFinite(+prior)?+prior:null,saved:new Date().toISOString().slice(0,10)};localStorage.setItem(regimeStorageKey(sym),JSON.stringify(data))}
+function longTermRegime(bars,p,s20){
+ const closes=bars.map(b=>b.c),sym=$('ticker').value.trim().toUpperCase(),manual=getManual200(sym);
+ const liveCurrent=+$('manual200').value,livePriorText=$('prior200').value.trim(),livePrior=livePriorText===''?NaN:+livePriorText;
+ let s200=NaN,prior200=NaN,source='UNAVAILABLE',asof='';
+ if(closes.length>=200){s200=sma(closes,200);prior200=closes.length>=220?sma(closes,200,closes.length-21):NaN;source='AUTO';asof=bars[bars.length-1].d}
+ else if(Number.isFinite(liveCurrent)&&liveCurrent>0){s200=liveCurrent;prior200=Number.isFinite(livePrior)&&livePrior>0?livePrior:(manual?manual.prior:NaN);source='MANUAL';asof=manual&&manual.saved?manual.saved:'CURRENT INPUT'}
+ else if(manual){s200=manual.current;prior200=manual.prior;source='MANUAL';asof=manual.saved}
+ let slope='UNKNOWN';
+ if(Number.isFinite(s200)&&Number.isFinite(prior200)&&prior200>0){const d=(s200-prior200)/prior200;if(d>.0025)slope='RISING';else if(d<-.0025)slope='FALLING';else slope='FLAT'}
+ let type='UNAVAILABLE';
+ if(Number.isFinite(s200)){
+   const above=p>s200,below=p<s200,twentyAbove=Number.isFinite(s20)?s20>s200:null,twentyBelow=Number.isFinite(s20)?s20<s200:null;
+   if(above&&twentyAbove!==false&&slope!=='FALLING')type='BULLISH';
+   else if(below&&twentyBelow!==false&&slope!=='RISING')type='BEARISH';
+   else type='TRANSITION';
+ }
+ const distance=Number.isFinite(s200)&&s200!==0?(p-s200)/s200*100:NaN;
+ return{type,s200,prior200,slope,source,asof,distance};
+}
+function analyze(bars){
+ const closes=bars.map(b=>b.c),last=bars[bars.length-1],prev=bars[bars.length-2]||last,p=last.c;
+ const a=atr(bars,14)||Math.max(p*.015,.01),r=rsi(closes,14),s20=sma(closes,20),s50=sma(closes,50),sw=swingPoints(bars),st=structureInfo(sw);
+ const regime=longTermRegime(bars,p,s20);
+ const low20=Math.min(...bars.slice(-20).map(b=>b.l)),high20=Math.max(...bars.slice(-20).map(b=>b.h));
+ const support=nearestBelow(sw.lows,p,low20),resistance=nearestAbove(sw.highs,p,high20);
+ const nearSupport=(p-support)<=a*1.15,nearResistance=(resistance-p)<=a*1.15;
+ const ext20=Number.isFinite(s20)?(p-s20)/a:0;
+ const maBull=Number.isFinite(s20)&&Number.isFinite(s50)&&p>s20&&s20>=s50;
+ const maBear=Number.isFinite(s20)&&Number.isFinite(s50)&&p<s20&&s20<=s50;
+ const trendBull=st.type==='BULLISH'||maBull, trendBear=st.type==='BEARISH'||maBear;
+ const fib=fibContext(sw,p,a);
+ let direction=null,setup='No clean setup',setupDetail='Structure/location not aligned',setupStrength=0,crash=false;
+ const lastHighPair=st.hs,lastLowPair=st.ls;
+ const hasLH=lastHighPair.length===2&&lastHighPair[1].p<lastHighPair[0].p, hasHL=lastLowPair.length===2&&lastLowPair[1].p>lastLowPair[0].p;
+
+ // Exhaustion/reversal setups remain WATCH until structure actually confirms the reversal.
+ if(ext20>1.6&&r>66){direction='SHORT';crash=true;setup='Crash / Exhaustion';setupDetail=hasLH?'Extended rise + lower high; reversal structure forming':'Extended rise; waiting for lower high';setupStrength=2}
+ else if(ext20<-1.6&&r<34){direction='LONG';crash=true;setup='Capitulation Reversal';setupDetail=hasHL?'Extended decline + higher low; reversal structure forming':'Extended decline; waiting for higher low';setupStrength=2}
+ // Compression is its own state: prepare for a break, do not predict the resolution.
+ else if(st.type==='COMPRESSION'){
+   if(maBull||nearSupport){direction='LONG';setup='Compression Breakout Watch';setupDetail='Bullish context, but LH → HL compression is unresolved';setupStrength=2}
+   else if(maBear||nearResistance){direction='SHORT';setup='Compression Breakdown Watch';setupDetail='Bearish context, but LH → HL compression is unresolved';setupStrength=2}
+   else {setup='Compression — No Bias';setupDetail='Wait for price to resolve the range';setupStrength=1}
+ }
+ else if(st.type==='BULLISH'&&(nearSupport||fib.near)){direction='LONG';setup='Pullback Continuation';setupDetail=(nearSupport?'Support ':'')+(fib.near?'+ Fib ':'')+'in bullish structure';setupStrength=3}
+ else if(st.type==='BEARISH'&&(nearResistance||fib.near)){direction='SHORT';setup='Pullback Continuation';setupDetail=(nearResistance?'Resistance ':'')+(fib.near?'+ Fib ':'')+'in bearish structure';setupStrength=3}
+ else if(st.type==='BULLISH'){direction='LONG';setup='Trend Continuation Watch';setupDetail='Bullish structure; waiting for favorable location';setupStrength=1}
+ else if(st.type==='BEARISH'){direction='SHORT';setup='Trend Continuation Watch';setupDetail='Bearish structure; waiting for favorable location';setupStrength=1}
+ else if(trendBull){direction='LONG';setup='Counterstructure Watch';setupDetail=`Long context exists, but primary structure is ${st.type.toLowerCase()}`;setupStrength=1}
+ else if(trendBear){direction='SHORT';setup='Counterstructure Watch';setupDetail=`Short context exists, but primary structure is ${st.type.toLowerCase()}`;setupStrength=1}
+
+ let trigger=NaN,entry=NaN,stop=NaN,target=NaN,rr=NaN,available=NaN,structureConfirmed=false,entryTriggered=false,chased=false,invalidated=false;
+ if(direction==='LONG'){
+   const recentHigh=Math.max(...bars.slice(-5,-1).map(b=>b.h)); trigger=recentHigh; entry=trigger+a*.10; stop=Math.min(support,Math.min(...bars.slice(-6).map(b=>b.l)))-a*.12; const risk=entry-stop; available=resistance>entry?resistance-entry:risk*2.6; rr=risk>0?available/risk:NaN; target=entry+risk*2; structureConfirmed=p>trigger; entryTriggered=p>=entry; chased=entryTriggered&&p>entry+risk*.55; invalidated=p<stop;
+ } else if(direction==='SHORT'){
+   const recentLow=Math.min(...bars.slice(-5,-1).map(b=>b.l)); trigger=recentLow; entry=trigger-a*.10; stop=Math.max(resistance,Math.max(...bars.slice(-6).map(b=>b.h)))+a*.12; const risk=stop-entry; available=entry>support?entry-support:risk*2.6; rr=risk>0?available/risk:NaN; target=entry-risk*2; structureConfirmed=p<trigger; entryTriggered=p<=entry; chased=entryTriggered&&p<entry-risk*.55; invalidated=p>stop;
+ }
+
+ const strictAligned=(st.type==='BULLISH'&&direction==='LONG')||(st.type==='BEARISH'&&direction==='SHORT');
+ // A resolved compression/reversal break can temporarily satisfy the structure gate, but only after the break.
+ const resolutionSetup=st.type==='COMPRESSION'||crash||setup==='Counterstructure Watch';
+ const structureGate=!!direction&&(strictAligned||(resolutionSetup&&structureConfirmed));
+ const history=direction?backgroundHistory(bars,direction):.5;
+ let score=0,e=[];
+ if(direction){score+=1;e.push(['Directional bias',direction]);}
+ if(strictAligned){score+=2;e.push(['Structure','aligned +2']);}
+ else if(structureGate){score+=1;e.push(['Structure','break confirmed +1']);}
+ else if(direction)e.push(['Structure',`${st.type.toLowerCase()} — gate closed`]);
+ if((direction==='LONG'&&nearSupport)||(direction==='SHORT'&&nearResistance)){score+=2;e.push(['Location','key zone +2']);}else if(direction)e.push(['Location','not ideal']);
+ if(fib.near){score+=1;e.push(['Fibonacci','confluence +1']);}
+ if((direction==='LONG'&&r>=45&&r<=68)||(direction==='SHORT'&&r<=55&&r>=32)){score+=1;e.push(['Momentum','usable +1']);}
+ if(structureConfirmed){score+=1;e.push(['Confirmation','structure break +1']);}else if(direction)e.push(['Confirmation','waiting']);
+ if(entryTriggered){score+=1;e.push(['Entry trigger','fired +1']);}else if(direction)e.push(['Entry trigger','waiting']);
+ const regimeAligned=(direction==='LONG'&&regime.type==='BULLISH')||(direction==='SHORT'&&regime.type==='BEARISH');
+ const regimeConflict=(direction==='LONG'&&regime.type==='BEARISH')||(direction==='SHORT'&&regime.type==='BULLISH');
+ if(regimeAligned){score+=1;e.push(['200 SMA regime',`${regime.type.toLowerCase()} +1`]);}
+ else if(regimeConflict){score=Math.max(0,score-2);e.push(['200 SMA regime','countertrend -2']);}
+ else if(direction&&regime.type==='TRANSITION')e.push(['200 SMA regime','transition']);
+ else if(direction)e.push(['200 SMA regime','not supplied']);
+ if(history>=.55){score+=1;e.push(['Background history','supports +1']);}
+ if((direction==='LONG'&&nearResistance)||(direction==='SHORT'&&nearSupport)){score=Math.max(0,score-2);e.push(['Nearby barrier','penalty -2']);}
+ score=clamp(score,0,9);
+
+ const regimeGate=!regimeConflict;
+ const armedQuality=5,tradeQuality=6;
+ let state='WAIT',why='No sufficiently clean opportunity.';
+ if(invalidated){state='INVALIDATED';why='Price crossed the structural invalidation level.'}
+ else if(chased){state='MISSED';why='Entry trigger fired, but price is too far beyond the planned entry. Do not chase.'}
+ else if(!direction||setupStrength===0){state='WAIT';}
+ else if(!regimeGate){state='WATCH';why=`The ${direction.toLowerCase()} setup conflicts with the ${regime.type.toLowerCase()} 200-SMA regime. Countertrend setups cannot become ARMED.`}
+ else if(!structureGate){state='WATCH';why=st.type==='COMPRESSION'?`${setupDetail}. Wait for ${direction==='LONG'?'a break above':'a break below'} ${fmt(trigger)} to resolve structure.`:`${setupDetail}. Structure confirmation is required before ARMED.`}
+ else if(score<armedQuality){state='WATCH';why=`Structure is confirmed, but trade quality is only ${score}/9. Minimum ${armedQuality}/9 required for ARMED.`}
+ else if(!(rr>=2)){state='WATCH';why=`Structure is confirmed, but the 2:1 reward/risk gate is not satisfied.`}
+ else if(!entryTriggered){state='ARMED';why=`Structure confirmed. Setup qualifies; wait for entry trigger at ${fmt(entry)}.`}
+ else if(score<tradeQuality){state='ARMED';why=`Entry triggered, but quality is ${score}/9. Minimum ${tradeQuality}/9 required for TRADE.`}
+ else {state='TRADE';why=`Confirmed ${direction.toLowerCase()} setup with structure, entry trigger, quality ${score}/9 and ≥2R clearance.`}
+ return{p,change:(p-prev.c)/prev.c*100,a,r,s20,s50,regime,sw,st,support,resistance,nearSupport,nearResistance,ext20,fib,direction,setup,setupDetail,trigger,entry,stop,target,rr,available,confirmed:structureConfirmed,structureConfirmed,entryTriggered,chased,invalidated,score,e,state,why,history,crash,structureGate,regimeGate,armedQuality,tradeQuality};
+}
+function applyClass(el,kind){el.classList.remove('pos','neg','warn','info');if(kind)el.classList.add(kind)}
+function render(a,bars){lastAnalysis=a;const sym=$('ticker').value.trim().toUpperCase()||'—';$('price').textContent=fmt(a.p);$('change').textContent=pct(a.change);applyClass($('change'),a.change>=0?'pos':'neg');$('structure').textContent=a.st.type;$('structureSeq').textContent=a.st.seq;applyClass($('structure'),a.st.type==='BULLISH'?'pos':a.st.type==='BEARISH'?'neg':'warn');$('setup').textContent=a.setup;$('setupDetail').textContent=a.setupDetail;$('trigger').textContent=Number.isFinite(a.trigger)?fmt(a.trigger):'—';$('triggerDetail').textContent=a.direction?(a.structureConfirmed?'Structure confirmed':'Wait for '+(a.direction==='LONG'?'break above':'break below')):'No trigger';$('entry').textContent=fmt(a.entry);$('stop').textContent=fmt(a.stop);$('invalid').textContent=Number.isFinite(a.stop)?'Invalid beyond '+fmt(a.stop):'Invalidation —';$('rr').textContent=Number.isFinite(a.rr)?a.rr.toFixed(2)+':1':'—';$('target').textContent=fmt(a.target);$('targetDetail').textContent=a.direction?'Minimum 2R objective':'No target';$('rrGate').textContent=Number.isFinite(a.rr)?(a.rr>=2?'PASS ≥ 2R':a.rr>=1.5?'MARGINAL — BLOCKED':'FAIL — BLOCKED'):'Waiting';$('rrGate').className='mini lock '+(a.rr>=2?'pass':'fail');$('location').textContent=a.nearSupport?'AT SUPPORT':a.nearResistance?'AT RESISTANCE':'MID-RANGE';$('levels').textContent=`S ${fmt(a.support)} • R ${fmt(a.resistance)}`;$('fib').textContent=a.fib.near?a.fib.label+' CONFLUENCE':a.fib.label;$('fibDetail').textContent=a.fib.detail;$('quality').textContent=a.score>=7?'STRONG':a.score>=5?'MODERATE':'WEAK';$('qualityDetail').textContent=a.score+' / 9';$('qualityFill').style.width=(a.score/9*100)+'%';$('chase').textContent=a.chased?'MISSED — DON’T CHASE':a.entryTriggered?'ENTRY TRIGGERED':a.structureConfirmed?'STRUCTURE CONFIRMED':'NOT TRIGGERED';applyClass($('chase'),a.chased?'neg':a.entryTriggered?'pos':'warn');$('chaseDetail').textContent=a.chased?'Wait for pullback or a new structure':a.structureConfirmed&&!a.entryTriggered?`Next trigger ${fmt(a.entry)}`:'Uses 0.55R chase limit';$('momentum').textContent='RSI '+(Number.isFinite(a.r)?a.r.toFixed(0):'—');$('momentumDetail').textContent=`20 SMA ${fmt(a.s20)} • extension ${a.ext20.toFixed(2)} ATR`;$('regime').textContent=a.regime.type;applyClass($('regime'),a.regime.type==='BULLISH'?'pos':a.regime.type==='BEARISH'?'neg':a.regime.type==='TRANSITION'?'warn':'');$('regimeDetail').textContent=Number.isFinite(a.regime.s200)?`200 SMA ${fmt(a.regime.s200)} • ${a.regime.slope.toLowerCase()} • ${a.regime.distance>=0?'+':''}${a.regime.distance.toFixed(1)}% • ${a.regime.source}`:'Enter a true daily 200 SMA to enable';
+ $('decision').textContent=a.state;applyClass($('decision'),a.state==='TRADE'?'pos':a.state==='INVALIDATED'||a.state==='MISSED'?'neg':a.state==='ARMED'?'info':'warn');$('decisionWhy').textContent=a.why;
+ ['Watch','Armed','Trade','Invalid'].forEach(x=>$('stage'+x).classList.remove('active','bad'));if(a.state==='WATCH')$('stageWatch').classList.add('active');if(a.state==='ARMED')$('stageArmed').classList.add('active');if(a.state==='TRADE')$('stageTrade').classList.add('active');if(a.state==='INVALIDATED'||a.state==='MISSED')$('stageInvalid').classList.add('bad');
+ const ev=$('evidenceList');ev.innerHTML='';a.e.forEach(([k,v])=>{const d=document.createElement('div');d.className='evidenceItem';d.innerHTML=`<strong>${k}</strong> <span>${v}</span>`;ev.appendChild(d)});drawChart(bars,a);document.title=`${sym} • ${a.state} • BVB v2.10.4`;
+}
+function drawChart(bars,a){const c=$('chart'),dpr=window.devicePixelRatio||1,rect=c.getBoundingClientRect();c.width=Math.max(300,rect.width*dpr);c.height=Math.max(180,rect.height*dpr);const x=c.getContext('2d');x.scale(dpr,dpr);const w=rect.width,h=rect.height,pad={l:38,r:76,t:10,b:20};const vals=bars.flatMap(b=>[b.h,b.l]);if(Number.isFinite(a.regime.s200))vals.push(a.regime.s200);let min=Math.min(...vals),max=Math.max(...vals);const extra=(max-min)*.08||1;min-=extra;max+=extra;const X=i=>pad.l+i/(bars.length-1)*(w-pad.l-pad.r),Y=p=>pad.t+(max-p)/(max-min)*(h-pad.t-pad.b);
+ x.clearRect(0,0,w,h);x.strokeStyle='#1d3148';x.lineWidth=1;for(let i=0;i<5;i++){const yy=pad.t+i*(h-pad.t-pad.b)/4;x.beginPath();x.moveTo(pad.l,yy);x.lineTo(w-pad.r,yy);x.stroke();const val=max-i*(max-min)/4;x.fillStyle='#8fa4bc';x.font='9px system-ui';x.fillText(val.toFixed(2),w-pad.r+5,yy+3)}
+ function zone(level,color){if(!Number.isFinite(level))return;const hh=Math.max(3,a.a/(max-min)*(h-pad.t-pad.b)*.22);x.fillStyle=color;x.fillRect(pad.l,Y(level)-hh,w-pad.l-pad.r,hh*2)}zone(a.support,'rgba(125,211,252,.16)');zone(a.resistance,'rgba(248,113,113,.14)');if(a.fib.near)zone(a.fib.level,'rgba(182,147,255,.14)');
+ if(chartMode==='candles'){
+  const plotW=w-pad.l-pad.r, step=plotW/Math.max(1,bars.length-1), bodyW=Math.max(2,Math.min(8,step*.58));
+  bars.forEach((b,i)=>{const xx=X(i),up=b.c>=b.o,col=up?'#34d399':'#f87171';x.strokeStyle=col;x.fillStyle=col;x.lineWidth=1;x.beginPath();x.moveTo(xx,Y(b.h));x.lineTo(xx,Y(b.l));x.stroke();const yO=Y(b.o),yC=Y(b.c),top=Math.min(yO,yC),bh=Math.max(1.5,Math.abs(yC-yO));x.fillRect(xx-bodyW/2,top,bodyW,bh)});
+ }else{
+  x.strokeStyle='#e7eef7';x.lineWidth=1.6;x.beginPath();bars.forEach((b,i)=>{const xx=X(i),yy=Y(b.c);i?x.lineTo(xx,yy):x.moveTo(xx,yy)});x.stroke();
+ }
+ a.sw.highs.slice(-5).forEach(s=>{x.fillStyle='#ff8c8c';x.beginPath();x.arc(X(s.i),Y(s.p),2.5,0,Math.PI*2);x.fill()});a.sw.lows.slice(-5).forEach(s=>{x.fillStyle='#7dd3fc';x.beginPath();x.arc(X(s.i),Y(s.p),2.5,0,Math.PI*2);x.fill()});
+ if(Number.isFinite(a.trigger)){x.setLineDash([5,4]);x.strokeStyle='#ffd166';x.beginPath();x.moveTo(pad.l,Y(a.trigger));x.lineTo(w-pad.r,Y(a.trigger));x.stroke();x.setLineDash([])}
+ if(Number.isFinite(a.regime.s200)){const yy=Y(a.regime.s200);x.save();x.setLineDash([8,5]);x.strokeStyle='#60a5fa';x.lineWidth=1.8;x.beginPath();x.moveTo(pad.l,yy);x.lineTo(w-pad.r,yy);x.stroke();x.setLineDash([]);x.fillStyle='#60a5fa';x.font='bold 9px system-ui';const lab=`200 SMA ${fmt(a.regime.s200)}`;x.fillText(lab,w-pad.r+5,Math.max(12,Math.min(h-pad.b-3,yy+3)));x.restore()}
+ x.fillStyle='#8fa4bc';x.font='9px system-ui';x.fillText(bars[0].d,pad.l,h-5);const ld=bars[bars.length-1].d;x.fillText(ld,w-pad.r-x.measureText(ld).width,h-5);
+}
+function sampleData(n=100){const out=[];let p=118;const today=new Date();for(let i=n-1;i>=0;i--){const d=new Date(today);d.setDate(today.getDate()-i);const t=(n-i);const trend=t<55?.18:t<78?-.08:.14;const wave=Math.sin(t/4.2)*.55+Math.sin(t/10)*.32;const noise=(Math.random()-.5)*1.0;const o=p+(Math.random()-.5)*.6;const c=Math.max(5,o+trend+wave*.18+noise);const hi=Math.max(o,c)+Math.random()*1.2+.25,lo=Math.min(o,c)-Math.random()*1.2-.25;out.push({d:d.toISOString().slice(0,10),o,h:hi,l:lo,c,v:Math.round(1e6+Math.random()*4e6)});p=c}return out}
+async function fetchReal(){const key=$('apiKey').value.trim()||localStorage.getItem('bvb_alpha_key')||'',sym=$('ticker').value.trim().toUpperCase(),n=+$('bars').value;if(!key){setStatus('Add an Alpha Vantage API key, or use Sample Mode.');return}if(!sym){setStatus('Enter a ticker symbol.');return}$('realBtn').disabled=true;setStatus(`Loading ${sym}…`);try{const u=`https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=${encodeURIComponent(sym)}&outputsize=compact&apikey=${encodeURIComponent(key)}`;const res=await fetch(u);const j=await res.json();if(j.Note)throw new Error('API rate limit reached. Try again later.');if(j.Information)throw new Error(j.Information);if(j['Error Message'])throw new Error('Ticker or API request was not accepted.');const ts=j['Time Series (Daily)'];if(!ts)throw new Error('No daily series returned.');let bars=Object.entries(ts).map(([d,v])=>({d,o:+v['1. open'],h:+v['2. high'],l:+v['3. low'],c:+v['4. close'],v:+v['5. volume']})).sort((a,b)=>a.d.localeCompare(b.d)).slice(-n);if(bars.length<25)throw new Error('Not enough bars returned for analysis.');loadBars(bars,'REAL')}catch(e){setStatus('Real-data error: '+e.message)}finally{$('realBtn').disabled=false}}
+function loadBars(bars,source){lastBars=bars;const a=analyze(bars);render(a,bars);$('marketStatus').textContent=marketEstimate();$('dataThrough').textContent=bars[bars.length-1].d;$('dataSource').textContent=source;$('lastRefresh').textContent=nowStamp();setStatus(`${$('ticker').value.trim().toUpperCase()} analyzed. ${a.state}: ${a.why}`)}
+function sync200Inputs(){const sym=$('ticker').value.trim().toUpperCase(),m=getManual200(sym);$('manual200').value=m&&Number.isFinite(m.current)?m.current:'';$('prior200').value=m&&Number.isFinite(m.prior)?m.prior:'';$('maInputHint').textContent=m?`Saved for ${sym}${m.saved?' • '+m.saved:''}. 20 SMA is automatic.`:'Optional true 1D 200 SMA. 20 SMA is automatic.'}
+$('save200Btn').addEventListener('click',()=>{const sym=$('ticker').value.trim().toUpperCase(),cur=+$('manual200').value,prior=$('prior200').value.trim()===''?NaN:+$('prior200').value;if(!sym){setStatus('Enter a ticker first.');return}if(!Number.isFinite(cur)||cur<=0){localStorage.removeItem(regimeStorageKey(sym));sync200Inputs();if(lastBars.length)loadBars(lastBars,$('dataSource').textContent||'LOCAL');setStatus(`200 SMA cleared for ${sym}.`);return}setManual200(sym,cur,prior);sync200Inputs();if(lastBars.length)loadBars(lastBars,$('dataSource').textContent||'LOCAL');setStatus(`True daily 200 SMA saved for ${sym}.${Number.isFinite(prior)?' Slope will be calculated from the prior value.':' Slope remains unknown until a prior value is added.'}`)});
+$('ticker').addEventListener('change',sync200Inputs);
+$('saveKeyBtn').addEventListener('click',()=>{const k=$('apiKey').value.trim();if(k){localStorage.setItem('bvb_alpha_key',k);setStatus('API key saved on this device.')}else{localStorage.removeItem('bvb_alpha_key');setStatus('Saved API key cleared.')}});
+function syncChartModeButtons(){const lb=$('lineModeBtn'),cb=$('candleModeBtn');if(!lb||!cb)return;lb.classList.toggle('active',chartMode==='line');cb.classList.toggle('active',chartMode==='candles')}
+function setChartMode(mode){chartMode=mode==='candles'?'candles':'line';localStorage.setItem('bvb_chart_mode',chartMode);syncChartModeButtons();if(lastBars.length&&lastAnalysis)drawChart(lastBars,lastAnalysis)}
+$('lineModeBtn').addEventListener('click',()=>setChartMode('line'));
+$('candleModeBtn').addEventListener('click',()=>setChartMode('candles'));
+syncChartModeButtons();
+$('realBtn').addEventListener('click',fetchReal);$('sampleBtn').addEventListener('click',()=>loadBars(sampleData(+$('bars').value),'SAMPLE'));$('ticker').addEventListener('keydown',e=>{if(e.key==='Enter')fetchReal()});$('detailsBtn').addEventListener('click',()=>{const hidden=$('details').classList.toggle('hidden');$('chartCard').classList.toggle('hidden',hidden);$('detailsBtn').textContent=hidden?'Show Details':'Hide Details'});window.addEventListener('resize',()=>{if(lastBars.length&&lastAnalysis)drawChart(lastBars,lastAnalysis)});
+const saved=localStorage.getItem('bvb_alpha_key');if(saved)$('apiKey').value=saved;$('marketStatus').textContent=marketEstimate();$('dataSource').textContent='—';sync200Inputs();loadBars(sampleData(+$('bars').value),'SAMPLE');
+</script>
+</body>
+</html>
