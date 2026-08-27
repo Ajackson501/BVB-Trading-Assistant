@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#07111f">
+<title>BVB Agent B Lite</title>
+<style>
+:root{--bg:#07111f;--panel:#0d1a2a;--panel2:#091525;--line:#263b55;--text:#f4f7fb;--muted:#96aac0;--blue:#67a3ff;--green:#42d99b;--red:#ff7070;--yellow:#ffd166;--orange:#f59e0b;--cyan:#7dd3fc}
+*{box-sizing:border-box}body{margin:0;background:linear-gradient(#06101c,#091523);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.wrap{max-width:1180px;margin:auto;padding:12px 12px 30px}h1{margin:0;font-size:28px}.sub{color:var(--muted);font-size:12px;margin:3px 0 10px}.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px;margin-bottom:8px}.label{font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}.row{display:flex;gap:6px;flex-wrap:wrap;align-items:center}input,select,textarea,button{font:inherit;border-radius:9px;border:1px solid var(--line);background:#122036;color:#fff;padding:9px 10px;font-size:13px}button{font-weight:800;background:#2364d8}button.alt{background:#14243a}button.ghost{background:#0a1727}.ticker{width:90px;text-transform:uppercase}.api{flex:1;min-width:220px}.grid{display:grid;grid-template-columns:1.4fr 1fr;gap:8px}.readgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin-top:6px}.box{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:7px;min-width:0}.big{font-size:16px;font-weight:900;margin-top:2px;overflow-wrap:anywhere}.mini{font-size:10px;line-height:1.3;color:var(--muted);margin-top:2px}.actionbar{display:grid;grid-template-columns:repeat(5,1fr);gap:5px;margin-top:6px}.action{border:1px solid var(--line);background:#0a1727;border-radius:9px;text-align:center;padding:10px 4px;font-size:12px;font-weight:900;color:#8699ad}.action.active.wait{background:#5d4c14;color:#ffe680}.action.active.armed{background:#183d75;color:#bcd8ff}.action.active.enter{background:#0f5a43;color:#b6ffe2}.action.active.hold{background:#164b5c;color:#baf3ff}.action.active.exit{background:#6d2626;color:#ffd0d0}.heroAction{font-size:28px;font-weight:950;margin-top:4px}.heroAction.wait{color:var(--yellow)}.heroAction.armed{color:var(--blue)}.heroAction.enter,.heroAction.hold{color:var(--green)}.heroAction.exit{color:var(--red)}.counter{display:flex;align-items:center;justify-content:space-between;gap:8px}.counterNum{font-size:24px;font-weight:950}.meter{height:7px;background:#06101c;border:1px solid var(--line);border-radius:999px;overflow:hidden;margin-top:5px}.meter>div{height:100%;width:0;background:linear-gradient(90deg,var(--green),var(--yellow),var(--red))}.screenshotPreview{max-height:260px;width:100%;object-fit:contain;border-radius:8px;background:#050a10;display:none;margin-top:7px}.promptBox{width:100%;min-height:105px;resize:vertical;margin-top:7px}.status{font-size:11px;color:#c7d4e1;background:#0b1727;border:1px solid var(--line);border-radius:8px;padding:7px;margin-top:6px}.chartTop{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}.legend{font-size:10px;color:var(--muted)}canvas{width:100%;height:330px;background:#091525;border-radius:9px;display:block;margin-top:7px}.positionGrid{display:grid;grid-template-columns:repeat(4,1fr);gap:5px}.footer{font-size:10px;color:var(--muted);line-height:1.4}.success{color:var(--green)}.warn{color:var(--yellow)}@media(max-width:900px){.grid{grid-template-columns:1fr}.readgrid{grid-template-columns:repeat(2,1fr)}.positionGrid{grid-template-columns:repeat(2,1fr)}}@media(max-width:560px){.readgrid,.positionGrid{grid-template-columns:1fr}.actionbar{grid-template-columns:repeat(5,1fr)}canvas{height:280px}.wrap{padding:8px}h1{font-size:24px}}
+</style>
+</head>
+<body><div class="wrap">
+<h1>BVB Agent B Lite</h1>
+<div class="sub">Simplified BVB • Agent B momentum / breakout lens • screenshot workflow • automatic result return • 25-use daily counter</div>
+
+<div class="card counter">
+  <div><div class="label">Screenshot inquiries today</div><div><span id="usedCount" class="counterNum">0</span><span class="mini"> / 25 used</span></div><div class="meter"><div id="counterFill"></div></div></div>
+  <div class="row"><button id="undoUse" class="ghost">−1</button><button id="resetCount" class="alt">Reset Today</button></div>
+</div>
+
+<div class="grid">
+<div>
+<div class="card">
+<div class="chartTop"><div><div class="label">Agent B Action</div><div id="heroAction" class="heroAction wait">WAIT</div><div id="actionReason" class="mini">Load chart data or return a screenshot analysis.</div></div><div class="mini">Aggressive when aligned. No chase. Cut failed momentum quickly.</div></div>
+<div class="actionbar"><div id="actWait" class="action wait active">WAIT</div><div id="actArmed" class="action armed">ARMED</div><div id="actEnter" class="action enter">ENTER</div><div id="actHold" class="action hold">HOLD</div><div id="actExit" class="action exit">EXIT</div></div>
+</div>
+<div class="card">
+<div class="label">Agent B Chart Read</div>
+<div class="readgrid">
+<div class="box"><div class="label">Trend / structure</div><div id="trendRead" class="big">—</div><div id="trendDetail" class="mini">Waiting</div></div>
+<div class="box"><div class="label">8 / 20 / 200 SMA</div><div id="maRead" class="big">—</div><div id="maDetail" class="mini">Waiting</div></div>
+<div class="box"><div class="label">State / location</div><div id="stateRead" class="big">—</div><div id="stateDetail" class="mini">Waiting</div></div>
+<div class="box"><div class="label">Named event</div><div id="eventRead" class="big">—</div><div id="eventDetail" class="mini">Elephant / Tail / 180 / Color Change</div></div>
+<div class="box"><div class="label">Momentum</div><div id="momentumRead" class="big">—</div><div id="momentumDetail" class="mini">Waiting</div></div>
+<div class="box"><div class="label">Support / resistance</div><div id="srRead" class="big">—</div><div id="srDetail" class="mini">Waiting</div></div>
+<div class="box"><div class="label">Entry trigger</div><div id="triggerRead" class="big">—</div><div id="triggerDetail" class="mini">Waiting</div></div>
+<div class="box"><div class="label">Risk / invalidation</div><div id="riskRead" class="big">—</div><div id="riskDetail" class="mini">Waiting</div></div>
+</div>
+<div class="status">Agent B reads: direction/structure → 8/20/200 alignment → state → location → named event → confirmation → risk. Fast momentum and breakout continuation are favored; stretched entries are avoided.</div>
+</div>
+</div>
+
+<div>
+<div class="card">
+<div class="label">Screenshot Analyzer Shortcut</div>
+<div class="row" style="margin-top:6px"><input id="shotInput" type="file" accept="image/*"><button id="shareAnalyze">Analyze Screenshot</button></div>
+<img id="shotPreview" class="screenshotPreview" alt="Screenshot preview">
+<textarea id="agentPrompt" class="promptBox" readonly></textarea>
+<div class="row" style="margin-top:6px"><button id="copyPrompt" class="alt">Copy Agent B Prompt</button><button id="openShortcuts" class="ghost">Open Shortcuts</button></div>
+<div class="status" id="shotStatus">Upgraded: when your shortcut copies ChatGPT's JSON result and returns to this page, BVB can apply it automatically. Manual paste remains as a fallback.</div>
+</div>
+
+<div class="card">
+<div class="label">Screenshot Result</div>
+<textarea id="resultInput" class="promptBox" placeholder='Automatic result appears here. Manual fallback: paste JSON and tap Apply.'></textarea>
+<div class="row" style="margin-top:6px"><button id="applyResult">Apply Result</button><button id="applyClipboard" class="alt">Apply Clipboard</button><button id="clearResult" class="ghost">Clear</button></div>
+<div class="mini">Shortcut recommendation: Ask ChatGPT about ChartScreenshot with the Agent B prompt → Copy to Clipboard → Open this BVB page.</div>
+</div>
+</div>
+</div>
+
+<div class="card">
+<div class="chartTop"><div class="label">Price Structure Chart</div><div class="legend">Candles • 8 SMA (orange) • 20 SMA (white) • 200 SMA (blue)</div></div>
+<div class="row" style="margin-top:6px"><input id="ticker" class="ticker" value="AVGO"><select id="bars"><option value="60">60 bars</option><option value="100" selected>100 bars</option></select><input id="apiKey" class="api" type="password" placeholder="Alpha Vantage API key"><button id="saveKey" class="alt">Save Key</button><button id="loadReal">Analyze Real Data</button><button id="sample" class="alt">Sample</button></div>
+<div class="row" style="margin-top:6px"><input id="manual200" type="number" step="0.01" placeholder="Manual 200 SMA"><button id="save200" class="ghost">Save 200</button></div>
+<canvas id="chart"></canvas>
+<div class="status" id="dataStatus">Checking local storage for your previously saved Alpha Vantage key…</div>
+</div>
+
+<div class="card">
+<div class="label">Open Position Management</div>
+<div class="positionGrid" style="margin-top:6px">
+<div class="box"><div class="label">Position</div><select id="position"><option value="flat">FLAT</option><option value="long">LONG</option><option value="short">SHORT</option></select></div>
+<div class="box"><div class="label">Entry price</div><input id="entryPrice" type="number" step="0.01" placeholder="Entry"></div>
+<div class="box"><div class="label">Stop</div><input id="stopPrice" type="number" step="0.01" placeholder="Stop"></div>
+<div class="box"><div class="label">Reaction / target</div><input id="targetPrice" type="number" step="0.01" placeholder="Target"></div>
+</div>
+<div class="mini" style="margin-top:6px">When LONG or SHORT is selected, Agent B can switch to HOLD or EXIT based on stop violation, loss of momentum, an opposite event, or the reaction/target area.</div>
+</div>
+<div class="footer">The Alpha Vantage API key is never embedded in this HTML. The app checks both the current key name and the older BVB key name in this browser's local storage, then migrates an old key to the current storage name if found.</div>
+</div>
+<script>
+'use strict';
+const $=id=>document.getElementById(id),fmt=n=>Number.isFinite(n)?'$'+n.toFixed(2):'—';let lastBars=[],lastA=null;
+function mean(a){const v=a.filter(Number.isFinite);return v.length?v.reduce((x,y)=>x+y,0)/v.length:NaN}
+function sma(v,n,i=v.length-1){return i-n+1<0?NaN:mean(v.slice(i-n+1,i+1))}
+function med(a){const v=a.filter(Number.isFinite).sort((x,y)=>x-y);if(!v.length)return NaN;const m=Math.floor(v.length/2);return v.length%2?v[m]:(v[m-1]+v[m])/2}
+function todayKey(){return new Date().toISOString().slice(0,10)}
+function loadCounter(){let o={date:todayKey(),used:0};try{o=JSON.parse(localStorage.getItem('bvb_b_counter')||'null')||o}catch(_){}if(o.date!==todayKey())o={date:todayKey(),used:0};return o}
+function saveCounter(o){localStorage.setItem('bvb_b_counter',JSON.stringify(o));renderCounter()}
+function renderCounter(){const o=loadCounter();$('usedCount').textContent=o.used;$('counterFill').style.width=Math.min(100,o.used/25*100)+'%'}
+function incUse(){const o=loadCounter();o.used=Math.min(25,o.used+1);saveCounter(o)}
+$('undoUse').onclick=()=>{const o=loadCounter();o.used=Math.max(0,o.used-1);saveCounter(o)};
+$('resetCount').onclick=()=>saveCounter({date:todayKey(),used:0});
+
+const PROMPT=`Act as Agent B for BVB Trading Assistant. Analyze the attached Robinhood screenshot using the learned BVB framework, with Agent B's aggressive short-term style. Prioritize: 2m/5m price structure; 8/20/200 SMA alignment; narrow/trending/wide state; price location near 8/20 or support/resistance; Elephant, Tail, 180, or Color Change; breakout/continuation momentum; do-not-chase discipline; clean-air to the next barrier; and fast invalidation. If a position is already open, decide HOLD or EXIT. Do not invent numbers you cannot read. Return ONLY valid JSON with these keys: action (WAIT|ARMED|ENTER|HOLD|EXIT), trend, ma, state, event, momentum, supportResistance, trigger, risk, reason.`;
+$('agentPrompt').value=PROMPT;
+
+function setAction(action,reason){action=String(action||'WAIT').toUpperCase();if(!['WAIT','ARMED','ENTER','HOLD','EXIT'].includes(action))action='WAIT';$('heroAction').textContent=action;$('heroAction').className='heroAction '+action.toLowerCase();['Wait','Armed','Enter','Hold','Exit'].forEach(x=>$('act'+x).className='action '+x.toLowerCase());$('act'+action[0]+action.slice(1).toLowerCase()).classList.add('active');$('actionReason').textContent=reason||''}
+function setRead(id,value,detail){$(id+'Read').textContent=value||'—';if(detail!==undefined)$(id+'Detail').textContent=detail||''}
+function parseAgentJSON(t){t=String(t||'').trim();const first=t.indexOf('{'),last=t.lastIndexOf('}');if(first>=0&&last>first)t=t.slice(first,last+1);const j=JSON.parse(t);j.action=String(j.action||'').toUpperCase();if(!['WAIT','ARMED','ENTER','HOLD','EXIT'].includes(j.action))throw new Error('Not Agent B JSON');return j}
+function applyAgent(j,source){setAction(j.action,j.reason);setRead('trend',j.trend);setRead('ma',j.ma);setRead('state',j.state);setRead('event',j.event);setRead('momentum',j.momentum);setRead('sr',j.supportResistance);setRead('trigger',j.trigger);setRead('risk',j.risk);$('resultInput').value=JSON.stringify(j,null,2);try{localStorage.setItem('bvb_b_last_result',JSON.stringify(j))}catch(_){}$('shotStatus').textContent=source+' applied to Agent B dashboard.'}
+function applyText(t,source){try{applyAgent(parseAgentJSON(t),source);return true}catch(_){return false}}
+
+$('applyResult').onclick=()=>{if(!applyText($('resultInput').value,'Manual result'))$('shotStatus').textContent='Could not parse valid Agent B JSON.'};
+$('applyClipboard').onclick=async()=>{try{const t=await navigator.clipboard.readText();if(!applyText(t,'Clipboard result'))$('shotStatus').textContent='Clipboard does not contain valid Agent B JSON.'}catch(_){$('shotStatus').textContent='Clipboard access was blocked. Paste the JSON manually.'}};
+$('clearResult').onclick=()=>{$('resultInput').value=''};
+
+async function tryClipboardAuto(){try{const t=await navigator.clipboard.readText();if(!t)return;const sig=t.trim();if(sig===sessionStorage.getItem('bvb_b_seen'))return;if(applyText(sig,'Shortcut result'))sessionStorage.setItem('bvb_b_seen',sig)}catch(_){}}
+function readCallback(){try{const u=new URL(location.href),raw=u.searchParams.get('json')||u.searchParams.get('result');if(raw&&applyText(raw,'Shortcut callback')){u.searchParams.delete('json');u.searchParams.delete('result');history.replaceState({},'',u.pathname+(u.searchParams.toString()?'?'+u.searchParams.toString():'')+u.hash)}}catch(_){}}
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)setTimeout(tryClipboardAuto,250)});
+window.addEventListener('focus',()=>setTimeout(tryClipboardAuto,250));
+
+$('shotInput').onchange=e=>{const f=e.target.files[0];if(!f)return;$('shotPreview').src=URL.createObjectURL(f);$('shotPreview').style.display='block';$('shotStatus').textContent='Screenshot loaded. Tap Analyze Screenshot.'};
+$('copyPrompt').onclick=async()=>{await navigator.clipboard.writeText(PROMPT);$('shotStatus').textContent='Agent B prompt copied.'};
+$('openShortcuts').onclick=()=>location.href='shortcuts://';
+$('shareAnalyze').onclick=async()=>{const f=$('shotInput').files[0];if(!f){$('shotStatus').textContent='Choose a screenshot first.';return}const o=loadCounter();if(o.used>=25){$('shotStatus').textContent='25/25 screenshot inquiries already recorded today.';return}try{if(navigator.share&&navigator.canShare&&navigator.canShare({files:[f]})){await navigator.share({files:[f],text:PROMPT,title:'BVB Agent B Screenshot'});incUse();$('shotStatus').textContent='Shared. Have the shortcut copy the JSON response, then return here.'}else{await navigator.clipboard.writeText(PROMPT);incUse();$('shotStatus').textContent='Prompt copied. Share the screenshot to ChatGPT manually.'}}catch(e){$('shotStatus').textContent=e.name==='AbortError'?'Share canceled; counter unchanged.':'Share failed: '+e.message}};
+
+function barStats(b){const r=b.slice(-13,-1);return{range:med(r.map(x=>x.h-x.l))}}
+function swings(b,w=2){const hi=[],lo=[];for(let i=w;i<b.length-w;i++){let H=true,L=true;for(let j=i-w;j<=i+w;j++){if(i===j)continue;if(b[j].h>=b[i].h)H=false;if(b[j].l<=b[i].l)L=false}if(H)hi.push(b[i].h);if(L)lo.push(b[i].l)}return{hi,lo}}
+function analyze(b){const c=b.map(x=>x.c),last=b.at(-1),prev=b.at(-2)||last,p=last.c,m8=sma(c,8),m20=sma(c,20);let m200=sma(c,200);if(!Number.isFinite(m200)){const v=+localStorage.getItem('bvb_b_200_'+$('ticker').value.toUpperCase());if(v>0)m200=v}const atr=mean(b.slice(-14).map(x=>x.h-x.l))||p*.01,st=swings(b),hs=st.hi.slice(-2),ls=st.lo.slice(-2);let trend='MIXED';if(hs.length===2&&ls.length===2&&hs[1]>hs[0]&&ls[1]>ls[0])trend='BULLISH';else if(hs.length===2&&ls.length===2&&hs[1]<hs[0]&&ls[1]<ls[0])trend='BEARISH';const maBull=p>m8&&m8>m20&&(Number.isFinite(m200)?m20>m200:true),maBear=p<m8&&m8<m20&&(Number.isFinite(m200)?m20<m200:true);const gap=Number.isFinite(m200)?Math.abs(m20-m200)/atr:NaN;let state='TRENDING';if(Number.isFinite(gap)){if(gap<1.2)state='NARROW';else if(gap>3.2)state='WIDE'}const bs=barStats(b),rng=Math.max(last.h-last.l,.0001),body=Math.abs(last.c-last.o),ratio=Number.isFinite(bs.range)?rng/bs.range:1,up=last.c>last.o,dn=last.c<last.o,upper=last.h-Math.max(last.o,last.c),lower=Math.min(last.o,last.c)-last.l;let event='NONE',side='';if(prev.c<prev.o&&up&&last.h>prev.h&&ratio>1.1){event='BULL 180';side='LONG'}else if(prev.c>prev.o&&dn&&last.l<prev.l&&ratio>1.1){event='BEAR 180';side='SHORT'}else if(ratio>=1.45&&body/rng>.55){event=up?'BULL ELEPHANT':'BEAR ELEPHANT';side=up?'LONG':'SHORT'}else if(lower/rng>.45){event='BOTTOMING TAIL';side='LONG'}else if(upper/rng>.45){event='TOPPING TAIL';side='SHORT'}else if(prev.c<prev.o&&up&&last.h>prev.h){event='BULL COLOR CHANGE';side='LONG'}else if(prev.c>prev.o&&dn&&last.l<prev.l){event='BEAR COLOR CHANGE';side='SHORT'}const recent=b.slice(-20),support=Math.min(...recent.map(x=>x.l)),resist=Math.max(...recent.map(x=>x.h)),near8=Math.abs(p-m8)<=atr*.45,near20=Math.abs(p-m20)<=atr*.55,momBull=(m8>sma(c,8,c.length-3))&&p>m8,momBear=(m8<sma(c,8,c.length-3))&&p<m8;let direction=maBull||trend==='BULLISH'?'LONG':maBear||trend==='BEARISH'?'SHORT':'';let action='WAIT',reason='No aligned Agent B setup.',trigger='—',risk='—';if(direction==='LONG'){trigger=fmt(prev.h);risk='Below '+fmt(Math.min(last.l,prev.l,m20));if((near8||near20)&&['LONG',''].includes(side)){action=side==='LONG'?(p>prev.h?'ENTER':'ARMED'):'ARMED';reason=action==='ENTER'?'Bullish event confirmed with momentum.':'Bullish structure aligned; wait for trigger.'}if(state==='WIDE'&&!near8&&!near20){action='WAIT';reason='Bullish move extended; do not chase.'}}else if(direction==='SHORT'){trigger=fmt(prev.l);risk='Above '+fmt(Math.max(last.h,prev.h,m20));if((near8||near20)&&['SHORT',''].includes(side)){action=side==='SHORT'?(p<prev.l?'ENTER':'ARMED'):'ARMED';reason=action==='ENTER'?'Bearish event confirmed with momentum.':'Bearish structure aligned; wait for trigger.'}if(state==='WIDE'&&!near8&&!near20){action='WAIT';reason='Bearish move extended; do not chase.'}}
+const pos=$('position').value,stop=+$('stopPrice').value,target=+$('targetPrice').value;if(pos!=='flat'){const lng=pos==='long',stopHit=stop>0&&(lng?p<=stop:p>=stop),targetHit=target>0&&(lng?p>=target:p<=target),lost=lng?(!momBull&&p<m8):(!momBear&&p>m8),opp=lng?side==='SHORT':side==='LONG';if(stopHit||opp||(targetHit&&lost)){action='EXIT';reason=stopHit?'Stop/invalidation reached.':opp?'Opposite named event appeared.':'Target reached and momentum cooling.'}else{action='HOLD';reason=targetHit?'At reaction area; protect profit closely.':'Position remains valid while structure holds.'}}
+return{p,m8,m20,m200,trend,state,event,side,support,resist,near8,near20,maBull,maBear,momBull,momBear,direction,action,reason,trigger,risk}}
+function render(a){lastA=a;setAction(a.action,a.reason);setRead('trend',a.trend,(a.direction||'No directional bias')+' • price '+fmt(a.p));setRead('ma',(Number.isFinite(a.m8)?'8 '+fmt(a.m8):'8 —')+' | '+(Number.isFinite(a.m20)?'20 '+fmt(a.m20):'20 —')+(Number.isFinite(a.m200)?' | 200 '+fmt(a.m200):''),a.maBull?'Bullish alignment':a.maBear?'Bearish alignment':'Mixed / transitional');setRead('state',a.state,(a.near8?'Near 8 SMA • ':'')+(a.near20?'Near 20 SMA':'')||'No key-MA touch');setRead('event',a.event,a.side||'No named event');setRead('momentum',a.momBull?'BULLISH':a.momBear?'BEARISH':'COOLING / MIXED',a.direction?a.direction+' bias':'No clear bias');setRead('sr',fmt(a.support)+' / '+fmt(a.resist),'20-bar support / resistance');setRead('trigger',a.trigger,a.direction?a.direction+' confirmation':'Waiting');setRead('risk',a.risk,'Fast invalidation / no chase');draw(lastBars,a)}
+function draw(b,a){if(!b.length)return;const cv=$('chart'),r=cv.getBoundingClientRect(),d=window.devicePixelRatio||1;cv.width=r.width*d;cv.height=r.height*d;const x=cv.getContext('2d');x.scale(d,d);const W=r.width,H=r.height,pad={l:45,r:18,t:12,b:20},pw=W-pad.l-pad.r,ph=H-pad.t-pad.b,vals=b.flatMap(z=>[z.h,z.l]);[a.m8,a.m20,a.m200].filter(Number.isFinite).forEach(v=>vals.push(v));let lo=Math.min(...vals),hi=Math.max(...vals),ex=(hi-lo)*.07||1;lo-=ex;hi+=ex;const X=i=>pad.l+i/(b.length-1)*pw,Y=v=>pad.t+(hi-v)/(hi-lo)*ph;x.fillStyle='#091525';x.fillRect(0,0,W,H);x.strokeStyle='#20344a';x.fillStyle='#8ea4bb';x.font='9px -apple-system';for(let j=0;j<5;j++){const v=hi-(hi-lo)*j/4,y=Y(v);x.beginPath();x.moveTo(pad.l,y);x.lineTo(W-pad.r,y);x.stroke();x.fillText(v.toFixed(2),3,y+3)}const bw=Math.max(2,Math.min(7,pw/b.length*.65));b.forEach((z,i)=>{const xx=X(i),up=z.c>=z.o;x.strokeStyle=up?'#42d99b':'#ff7070';x.fillStyle=x.strokeStyle;x.beginPath();x.moveTo(xx,Y(z.h));x.lineTo(xx,Y(z.l));x.stroke();x.fillRect(xx-bw/2,Math.min(Y(z.o),Y(z.c)),bw,Math.max(1,Math.abs(Y(z.o)-Y(z.c))))});function line(n,color,manual){x.strokeStyle=color;x.lineWidth=1.7;x.beginPath();let s=false,cl=b.map(z=>z.c);for(let i=0;i<b.length;i++){const v=manual!==undefined?manual:sma(cl,n,i);if(!Number.isFinite(v))continue;if(!s){x.moveTo(X(i),Y(v));s=true}else x.lineTo(X(i),Y(v))}if(s)x.stroke()}line(8,'#f59e0b');line(20,'#f4f7fb');if(Number.isFinite(a.m200))line(200,'#4a94ff',a.m200)}
+function parseAV(d){const s=d['Time Series (Daily)'];if(!s)throw new Error(d.Note||d.Information||d['Error Message']||'No data');return Object.keys(s).sort().map(k=>({d:k,o:+s[k]['1. open'],h:+s[k]['2. high'],l:+s[k]['3. low'],c:+s[k]['4. close']}))}
+$('saveKey').onclick=()=>{const k=$('apiKey').value.trim();if(!k){$('dataStatus').textContent='Enter the Alpha Vantage key first.';return}try{localStorage.setItem('bvb_b_alpha',k);localStorage.setItem('bvb_alpha_key',k);$('dataStatus').textContent='API key saved locally under both BVB storage names.'}catch(e){$('dataStatus').textContent='Key save failed: '+e.message}};
+$('save200').onclick=()=>{const v=+$('manual200').value;if(v>0){localStorage.setItem('bvb_b_200_'+$('ticker').value.toUpperCase(),String(v));$('dataStatus').textContent='Manual 200 SMA saved.';if(lastBars.length)render(analyze(lastBars))}};
+$('loadReal').onclick=async()=>{const key=$('apiKey').value.trim(),sym=$('ticker').value.trim().toUpperCase();if(!key){$('dataStatus').textContent='Enter an Alpha Vantage API key.';return}try{$('dataStatus').textContent='Loading…';const u=`https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=${encodeURIComponent(sym)}&outputsize=compact&apikey=${encodeURIComponent(key)}`;const d=await fetch(u).then(r=>r.json()),all=parseAV(d);lastBars=all.slice(-+$('bars').value);render(analyze(lastBars));$('dataStatus').textContent=sym+' analyzed with Agent B rules.'}catch(e){$('dataStatus').textContent='Data error: '+e.message}};
+$('sample').onclick=()=>{const n=+$('bars').value,b=[];let p=150+Math.random()*150,dr=.15;for(let i=0;i<n;i++){dr=dr*.94+(Math.random()-.48)*.7;const o=p+(Math.random()-.5)*1.2,c=Math.max(5,o+dr+(Math.random()-.5)*1.5),h=Math.max(o,c)+Math.random(),l=Math.min(o,c)-Math.random();b.push({d:String(i+1),o,h,l,c});p=c}lastBars=b;render(analyze(b));$('dataStatus').textContent='Sample analyzed.'};
+['position','entryPrice','stopPrice','targetPrice'].forEach(id=>$(id).addEventListener('change',()=>{if(lastBars.length)render(analyze(lastBars))}));
+window.addEventListener('resize',()=>{if(lastBars.length&&lastA)draw(lastBars,lastA)});
+
+try{
+ const current=localStorage.getItem('bvb_b_alpha');
+ const old=localStorage.getItem('bvb_alpha_key');
+ const recovered=current||old||'';
+ if(recovered){
+   $('apiKey').value=recovered;
+   localStorage.setItem('bvb_b_alpha',recovered);
+   localStorage.setItem('bvb_alpha_key',recovered);
+   $('dataStatus').textContent=old&&!current?'Previous BVB Alpha Vantage key recovered and migrated.':'Saved Alpha Vantage key restored.';
+ }else $('dataStatus').textContent='No saved Alpha Vantage key was found in this browser. Enter it once and tap Save Key.';
+ const last=localStorage.getItem('bvb_b_last_result');if(last)applyText(last,'Last saved result');
+}catch(_){}
+readCallback();renderCounter();
+</script></body></html>
