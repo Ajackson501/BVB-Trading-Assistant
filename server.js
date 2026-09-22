@@ -7,6 +7,8 @@ app.use(express.json());
 
 const ALPACA_API_KEY = process.env.ALPACA_API_KEY;
 const ALPACA_SECRET_KEY = process.env.ALPACA_SECRET_KEY;
+console.log("API key loaded:", Boolean(ALPACA_API_KEY));
+console.log("Secret key loaded:", Boolean(ALPACA_SECRET_KEY));
 
 app.get("/", (req, res) => {
   res.json({
