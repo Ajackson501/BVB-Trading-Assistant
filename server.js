@@ -31,7 +31,7 @@ app.get("/googl", async (req, res) => {
     }
 
     const url =
-      "https://data.alpaca.markets/v2/stocks/GOOGL/bars?timeframe=1Min&limit=10&feed=iex";
+      "https://data.alpaca.markets/v2/stocks/GOOGL/bars?timeframe=2Min&limit=10&feed=iex";
 
     const response = await fetch(url, {
       headers: {
