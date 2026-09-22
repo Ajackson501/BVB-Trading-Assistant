@@ -40,11 +40,16 @@ app.get("/googl", async (req, res) => {
       }
     });
 
-    const data = await response.json();
+const text = await response.text();
 
-    if (!response.ok) {
-      return res.status(response.status).json(data);
-    }
+console.log("Alpaca status:", response.status);
+console.log("Alpaca response:", text);
+
+if (!response.ok) {
+  return res.status(response.status).send(text);
+}
+
+res.type("application/json").send(text);
 
     res.json(data);
   } catch (error) {
