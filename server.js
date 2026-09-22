@@ -61,7 +61,7 @@ res.type("application/json").send(text);
 app.get("/googl-ha", async (req, res) => {
   try {
     const url =
-      "https://data.alpaca.markets/v2/stocks/GOOGL/bars?timeframe=2Min&limit=50&feed=iex";
+      "https://data.alpaca.markets/v2/stocks/GOOGL/bars?timeframe=2Min&limit=200&feed=iex";
 
     const response = await fetch(url, {
       headers: {
