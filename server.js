@@ -51,7 +51,6 @@ if (!response.ok) {
 
 res.type("application/json").send(text);
 
-    res.json(data);
   } catch (error) {
     console.error("Alpaca error:", error);
     res.status(500).json({
