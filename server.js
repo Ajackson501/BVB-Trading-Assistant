@@ -11,7 +11,35 @@ console.log("API key loaded:", Boolean(ALPACA_API_KEY));
 console.log("Secret key loaded:", Boolean(ALPACA_SECRET_KEY));
 let latestGOOGLTrade = null;
 let alpacaStreamStatus = "connecting";
+let developingCandle = null;
 
+function updateDevelopingCandle(trade) {
+  const price = trade.price;
+  const size = trade.size || 0;
+  const tradeTime = new Date(trade.time);
+
+  const bucket = new Date(tradeTime);
+  bucket.setUTCSeconds(0, 0);
+  bucket.setUTCMinutes(Math.floor(bucket.getUTCMinutes() / 2) * 2);
+
+  const bucketTime = bucket.toISOString();
+
+  if (!developingCandle || developingCandle.time !== bucketTime) {
+    developingCandle = {
+      time: bucketTime,
+      open: price,
+      high: price,
+      low: price,
+      close: price,
+      volume: size
+    };
+  } else {
+    developingCandle.high = Math.max(developingCandle.high, price);
+    developingCandle.low = Math.min(developingCandle.low, price);
+    developingCandle.close = price;
+    developingCandle.volume += size;
+  }
+}
 function connectAlpacaStream() {
   const ws = new WebSocket("wss://stream.data.alpaca.markets/v2/iex");
 
@@ -46,6 +74,7 @@ function connectAlpacaStream() {
           size: message.s,
           time: message.t
         };
+        updateDevelopingCandle(latestGOOGLTrade);
       }
     }
   });
@@ -68,7 +97,8 @@ app.get("/googl-live", (req, res) => {
   res.json({
     symbol: "GOOGL",
     streamStatus: alpacaStreamStatus,
-    latestTrade: latestGOOGLTrade
+    latestTrade: latestGOOGLTrade,
+    developing2MinCandle: developingCandle
   });
 });
 app.get("/", (req, res) => {
