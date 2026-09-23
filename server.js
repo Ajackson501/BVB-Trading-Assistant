@@ -24,7 +24,7 @@ let developingCandle = null;
   
 let completedCandles = [];
 
-const MAX_COMPLETED_CANDLES = 200;
+const MAX_COMPLETED_CANDLES = 300;
 
 let historySeeded = false;
 
@@ -167,7 +167,7 @@ async function seedHistoricalCandles() {
 
 
     const url =
-      "https://data.alpaca.markets/v2/stocks/GOOGL/bars?timeframe=2Min&limit=200&feed=iex";
+      "https://data.alpaca.markets/v2/stocks/GOOGL/bars?timeframe=2Min&limit=300&feed=iex";
 
 
     const response =
