@@ -4334,11 +4334,28 @@ app.get(
       };
 
 
-    const html = `
+const battle = analyzeTrendBattle(completedCandles);
+
+const ropePosition = Number(battle.ropePosition || 0);
+const ropePercent = Math.max(0, Math.min(100, 50 + ropePosition / 2));
+
+const battleControl = battle.control || "NEUTRAL";
+const battlePressure = battle.pressure || "WAITING";
+const battlePhase = battle.phase || "WAIT";
+const battleAction = battle.action || "WAIT";
+
+const entryCrossed =
+  battle.entryMarker?.crossed || "NONE";
+
+const marketSession =
+  battle.marketSession?.session || "UNKNOWN";
+
+const regularHours =
+  battle.marketSession?.regularHours ?? false;
+
+const html = `
 <!DOCTYPE html>
-
 <html>
-
 <head>
 
 <meta
@@ -4346,9 +4363,7 @@ app.get(
   content="width=device-width, initial-scale=1.0"
 />
 
-<title>
-Agent Oliver — GOOGL
-</title>
+<title>BVB V2 — Trend Battle</title>
 
 <style>
 
@@ -4356,609 +4371,536 @@ Agent Oliver — GOOGL
   box-sizing: border-box;
 }
 
-body {
-
+html, body {
   margin: 0;
-
-  padding: 24px;
-
-  background: #0b0e13;
-
+  width: 100%;
+  min-height: 100%;
+  background: #080c12;
   color: #ffffff;
-
   font-family:
     -apple-system,
     BlinkMacSystemFont,
     "Segoe UI",
     sans-serif;
-
 }
 
-.container {
+body {
+  padding: 18px;
+}
 
-  max-width: 760px;
-
-  margin: 0 auto;
-
+.dashboard {
+  width: 100%;
+  max-width: 1100px;
+  margin: auto;
 }
 
 .header {
-
-  margin-bottom: 22px;
-
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
 }
 
-.agent {
-
+.title {
   font-size: 14px;
-
   letter-spacing: 2px;
-
-  color: #8d98a8;
-
-}
-
-.symbol {
-
-  font-size: 36px;
-
-  font-weight: 800;
-
-  margin-top: 5px;
-
+  color: #8995a7;
 }
 
 .price {
-
-  font-size: 22px;
-
-  color: #c9d1d9;
-
-  margin-top: 4px;
-
+  font-size: 28px;
+  font-weight: 800;
 }
+
+.session {
+  font-size: 12px;
+  color: #9ba7b8;
+  text-align: right;
+}
+
+/* -------------------------
+   BATTLE STATUS
+------------------------- */
 
 .status {
-
-  margin-top: 18px;
-
-  padding: 22px;
-
-  border-radius: 16px;
-
   text-align: center;
+  margin-bottom: 14px;
+}
 
-  font-size: 34px;
-
+.control {
+  font-size: clamp(26px, 5vw, 48px);
   font-weight: 900;
-
 }
 
-.status.call {
-
-  background: #123d2b;
-
-  border: 2px solid #2ecc71;
-
-  color: #62e69a;
-
+.pressure {
+  margin-top: 4px;
+  color: #aeb8c6;
+  font-size: 15px;
 }
 
-.status.put {
+/* -------------------------
+   TUG OF WAR
+------------------------- */
 
-  background: #421d24;
-
-  border: 2px solid #ff5364;
-
-  color: #ff7583;
-
+.arena {
+  background: #111720;
+  border: 1px solid #27303d;
+  border-radius: 20px;
+  padding: 20px;
 }
 
-.status.wait {
-
-  background: #2b3038;
-
-  border: 2px solid #7d8795;
-
-  color: #d1d5db;
-
+.teams {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 900;
+  font-size: clamp(18px, 3vw, 28px);
 }
 
-.reason {
+.bears {
+  color: #ff5b67;
+}
 
-  margin-top: 10px;
+.bulls {
+  color: #55e69a;
+}
 
+.ropeArea {
+  position: relative;
+  height: 110px;
+  margin-top: 5px;
+}
+
+.rope {
+  position: absolute;
+  left: 5%;
+  right: 5%;
+  top: 52px;
+  height: 10px;
+  border-radius: 10px;
+  background:
+    repeating-linear-gradient(
+      45deg,
+      #9b7653,
+      #9b7653 8px,
+      #c69a6b 8px,
+      #c69a6b 16px
+    );
+}
+
+/* CENTER */
+
+.centerLine {
+  position: absolute;
+  left: 50%;
+  top: 22px;
+  height: 70px;
+  width: 2px;
+  background: #7c8796;
+}
+
+.centerLabel {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  transform: translateX(-50%);
+  color: #7f8a99;
+  font-size: 11px;
+}
+
+/* ENTRY MARKERS */
+
+.bearEntry {
+  position: absolute;
+  left: 32.5%;
+  top: 28px;
+  height: 60px;
+  width: 2px;
+  background: #ff5b67;
+}
+
+.bullEntry {
+  position: absolute;
+  left: 67.5%;
+  top: 28px;
+  height: 60px;
+  width: 2px;
+  background: #55e69a;
+}
+
+.entryText {
+  position: absolute;
+  top: 90px;
+  transform: translateX(-50%);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.bearText {
+  left: 32.5%;
+  color: #ff7b84;
+}
+
+.bullText {
+  left: 67.5%;
+  color: #6bf0a9;
+}
+
+/* KNOT */
+
+.knot {
+  position: absolute;
+  left: ${ropePercent}%;
+  top: 38px;
+
+  width: 38px;
+  height: 38px;
+
+  transform: translateX(-50%);
+
+  border-radius: 50%;
+
+  background: #f3c969;
+  border: 5px solid #ffffff;
+
+  box-shadow:
+    0 0 12px rgba(255,255,255,.35);
+
+  transition:
+    left 0.8s ease;
+}
+
+/* -------------------------
+   ACTION
+------------------------- */
+
+.actionBox {
+  margin-top: 14px;
   text-align: center;
 
-  color: #aeb7c2;
+  padding: 13px;
 
-  font-size: 15px;
+  border-radius: 12px;
 
+  background: #171e28;
+  border: 1px solid #2c3644;
 }
 
-.grid {
+.action {
+  font-size: clamp(20px, 4vw, 32px);
+  font-weight: 900;
+}
 
+.phase {
+  margin-top: 4px;
+  font-size: 13px;
+  color: #9ca7b6;
+}
+
+/* -------------------------
+   INFO CARDS
+------------------------- */
+
+.cards {
   display: grid;
-
   grid-template-columns:
-    repeat(2, 1fr);
+    repeat(4, 1fr);
 
-  gap: 14px;
-
-  margin-top: 22px;
-
+  gap: 10px;
+  margin-top: 12px;
 }
 
 .card {
-
-  background: #151a22;
-
-  border: 1px solid #252c37;
-
-  border-radius: 14px;
-
-  padding: 18px;
-
+  background: #111720;
+  border: 1px solid #27303d;
+  border-radius: 12px;
+  padding: 11px;
 }
 
 .label {
-
-  color: #8792a2;
-
-  font-size: 12px;
-
-  text-transform: uppercase;
-
+  font-size: 10px;
   letter-spacing: 1px;
-
+  color: #7f8a99;
 }
 
 .value {
-
-  margin-top: 7px;
-
-  font-size: 22px;
-
-  font-weight: 700;
-
-}
-
-.trade {
-
-  margin-top: 22px;
-
-  background: #151a22;
-
-  border: 1px solid #252c37;
-
-  border-radius: 14px;
-
-  padding: 20px;
-
-}
-
-.tradeRow {
-
-  display: flex;
-
-  justify-content: space-between;
-
-  align-items: center;
-
-  padding: 12px 0;
-
-  border-bottom:
-    1px solid #252c37;
-
-}
-
-.tradeRow:last-child {
-
-  border-bottom: none;
-
-}
-
-.tradeLabel {
-
-  color: #8792a2;
-
-}
-
-.tradeValue {
-
-  font-size: 21px;
-
+  margin-top: 4px;
+  font-size: 15px;
   font-weight: 800;
-
-  text-align: right;
-
 }
 
-.footer {
+/* -------------------------
+   WARNING
+------------------------- */
 
-  margin-top: 20px;
-
-  color: #657080;
-
-  font-size: 12px;
-
+.warning {
+  margin-top: 12px;
   text-align: center;
 
+  padding: 10px;
+
+  border-radius: 10px;
+
+  background: #171e28;
+
+  font-size: 13px;
 }
 
-@media (
-  max-width: 600px
-) {
+/* -------------------------
+   MOBILE / PORTRAIT
+------------------------- */
+
+@media (max-width: 700px) {
 
   body {
-
-    padding: 15px;
-
+    padding: 10px;
   }
 
-  .grid {
+  .arena {
+    padding: 14px 10px;
+  }
 
+  .cards {
     grid-template-columns:
-      1fr;
-
+      repeat(2, 1fr);
   }
 
+  .ropeArea {
+    height: 105px;
+  }
+}
+
+/* -------------------------
+   LANDSCAPE
+------------------------- */
+
+@media (orientation: landscape)
+and (max-height: 700px) {
+
+  body {
+    padding: 8px 16px;
+  }
+
+  .header {
+    margin-bottom: 5px;
+  }
+
+  .status {
+    margin-bottom: 5px;
+  }
+
+  .arena {
+    padding: 10px 18px;
+  }
+
+  .ropeArea {
+    height: 100px;
+  }
+
+  .actionBox {
+    margin-top: 6px;
+    padding: 7px;
+  }
+
+  .cards {
+    margin-top: 6px;
+  }
+
+  .warning {
+    margin-top: 6px;
+    padding: 6px;
+  }
 }
 
 </style>
-
 </head>
-
 
 <body>
 
-<div class="container">
+<div class="dashboard">
 
+  <div class="header">
 
-<div class="header">
+    <div>
+      <div class="title">
+        BVB V2 — LIVE TREND BATTLE
+      </div>
 
-  <div class="agent">
-    AGENT OLIVER — LIVE ANALYSIS
+      <div class="price">
+        GOOGL $${Number(battle.price || 0).toFixed(2)}
+      </div>
+    </div>
+
+    <div class="session">
+      ${marketSession}<br>
+      ${regularHours ? "LIVE MARKET" : "MARKET CLOSED"}
+    </div>
+
   </div>
 
-  <div class="symbol">
-    GOOGL
+
+  <div class="status">
+
+    <div class="control">
+      ${
+        battleControl === "BULLS"
+          ? "🐂 BULLS IN CONTROL"
+          : battleControl === "BEARS"
+          ? "🐻 BEARS IN CONTROL"
+          : "⚖️ BATTLE NEUTRAL"
+      }
+    </div>
+
+    <div class="pressure">
+      ${battlePressure}
+    </div>
+
   </div>
 
-  <div class="price">
-    ${money(analysis.price)}
+
+  <div class="arena">
+
+    <div class="teams">
+
+      <div class="bears">
+        🐻 BEARS
+      </div>
+
+      <div class="bulls">
+        BULLS 🐂
+      </div>
+
+    </div>
+
+
+    <div class="ropeArea">
+
+      <div class="centerLabel">
+        NEUTRAL
+      </div>
+
+      <div class="rope"></div>
+
+      <div class="centerLine"></div>
+
+      <div class="bearEntry"></div>
+
+      <div class="bullEntry"></div>
+
+      <div class="entryText bearText">
+        PUT ENTRY ZONE
+      </div>
+
+      <div class="entryText bullText">
+        CALL ENTRY ZONE
+      </div>
+
+      <div class="knot"></div>
+
+    </div>
+
   </div>
 
-</div>
 
+  <div class="actionBox">
 
-<div class="status ${actionClass}">
+    <div class="action">
+      ${
+        entryCrossed === "BULL_ENTRY"
+          ? "🔔 CALL ENTRY"
+          : entryCrossed === "BEAR_ENTRY"
+          ? "🔔 PUT ENTRY"
+          : battleAction
+      }
+    </div>
 
-  ${actionText}
+    <div class="phase">
+      ${battlePhase}
+    </div>
 
-</div>
-
-
-<div class="reason">
-
-  ${analysis.reason || ""}
-
-</div>
-
-
-<div class="grid">
-
-
-<div class="card">
-
-  <div class="label">
-    8 SMA
   </div>
 
-  <div class="value">
-    ${money(analysis.sma8)}
-    ${arrow(
-      analysis.sma8Direction
-    )}
+
+  <div class="cards">
+
+    <div class="card">
+      <div class="label">
+        CONTROL
+      </div>
+      <div class="value">
+        ${battleControl}
+      </div>
+    </div>
+
+
+    <div class="card">
+      <div class="label">
+        PRESSURE
+      </div>
+      <div class="value">
+        ${battlePressure}
+      </div>
+    </div>
+
+
+    <div class="card">
+      <div class="label">
+        HEIKIN-ASHI
+      </div>
+      <div class="value">
+        ${battle.haControl || "WAIT"}
+      </div>
+    </div>
+
+
+    <div class="card">
+      <div class="label">
+        HA RUN
+      </div>
+      <div class="value">
+        ${battle.haRunColor || "NONE"}
+        ${battle.haRunLength || 0}
+      </div>
+    </div>
+
   </div>
 
-</div>
 
+  <div class="warning">
 
-<div class="card">
-
-  <div class="label">
-    20 SMA
-  </div>
-
-  <div class="value">
-    ${money(analysis.sma20)}
-    ${arrow(
-      analysis.sma20Direction
-    )}
-  </div>
-
-</div>
-
-
-<div class="card">
-
-  <div class="label">
-    200 SMA
-  </div>
-
-  <div class="value">
-    ${money(analysis.sma200)}
-    ${arrow(
-      analysis.sma200Direction
-    )}
-  </div>
-
-</div>
-
-
-<div class="card">
-
-  <div class="label">
-    200 SMA Context
-  </div>
-
-  <div class="value">
-    ${analysis.sma200Context || "—"}
-  </div>
-
-</div>
-
-
-<div class="card">
-
-  <div class="label">
-    Market State
-  </div>
-
-  <div class="value">
-    ${analysis.state || "—"}
-  </div>
-
-</div>
-
-
-<div class="card">
-
-  <div class="label">
-    Structure
-  </div>
-
-  <div class="value">
-    ${analysis.structure || "—"}
-  </div>
-
-</div>
-
-
-<div class="card">
-
-  <div class="label">
-    Nearest Average
-  </div>
-
-  <div class="value">
-    ${analysis.nearestSMA || "—"}
-  </div>
-
-</div>
-
-
-<div class="card">
-
-  <div class="label">
-    Expansion
-  </div>
-
-  <div class="value">
-    ${analysis.expansion || "NONE"}
-  </div>
-
-</div>
-
-
-<div class="card">
-
-  <div class="label">
-    Bullish Checks
-  </div>
-
-  <div class="value">
-    ${analysis.bullishChecks ?? 0}
-  </div>
-
-</div>
-
-
-<div class="card">
-
-  <div class="label">
-    Bearish Checks
-  </div>
-
-  <div class="value">
-    ${analysis.bearishChecks ?? 0}
-  </div>
-
-</div>
-
-
-</div>
-
-
-<div class="trade">
-
-
-<div class="tradeRow">
-
-  <div class="tradeLabel">
-    Trigger
-  </div>
-
-  <div class="tradeValue">
-    ${money(
-      analysis.trigger
-    )}
-  </div>
-
-</div>
-
-
-<div class="tradeRow">
-
-  <div class="tradeLabel">
-    Invalidation
-  </div>
-
-  <div class="tradeValue">
-    ${money(
-      analysis.invalidation
-    )}
-  </div>
-
-</div>
-
-
-<div class="tradeRow">
-
-  <div class="tradeLabel">
-    Bullish Takeover
-  </div>
-
-  <div class="tradeValue">
     ${
-      analysis.bullishTakeover
-        ? "YES"
-        : "NO"
+      !regularHours
+
+        ? "🌙 Market closed — analysis is informational until regular trading resumes."
+
+        : battlePhase === "WARNING"
+
+        ? "🔔 Direction-change conditions developing."
+
+        : entryCrossed !== "NONE"
+
+        ? "🎯 Tug-of-war entry threshold crossed."
+
+        : "Monitoring the battle for a change in control."
     }
-  </div>
-
-</div>
-
-
-<div class="tradeRow">
-
-  <div class="tradeLabel">
-    Bearish Takeover
-  </div>
-
-  <div class="tradeValue">
-    ${
-      analysis.bearishTakeover
-        ? "YES"
-        : "NO"
-    }
-  </div>
-
-</div>
-
-
-<div class="tradeRow">
-
-  <div class="tradeLabel">
-    200 SMA
-  </div>
-
-  <div class="tradeValue">
-
-    ${money(
-      analysis.sma200
-    )}
-
-    ${arrow(
-      analysis.sma200Direction
-    )}
 
   </div>
-
-</div>
-
-
-<div class="tradeRow">
-
-  <div class="tradeLabel">
-    200 Alignment
-  </div>
-
-  <div class="tradeValue">
-    ${
-      analysis.sma200Alignment ||
-      "NEUTRAL"
-    }
-  </div>
-
-</div>
-
-
-<div class="tradeRow">
-
-  <div class="tradeLabel">
-    200 Status
-  </div>
-
-  <div class="tradeValue">
-    ${
-      analysis.sma200Status ||
-      "INSUFFICIENT_DATA"
-    }
-  </div>
-
-</div>
-
-
-</div>
-
-
-<div class="footer">
-
-  2-minute GOOGL candles •
-
-  ${
-    completedCandles.length
-  } completed candles •
-
-  ${
-    alpacaStreamStatus
-  }
-
-  <br><br>
-
-  Last analyzed candle:
-
-  ${
-    analysis.analyzedCandle ||
-    "waiting"
-  }
-
-</div>
-
 
 </div>
 
 
 <script>
 
-// Refresh Oliver's analysis every 10 seconds.
-
 setTimeout(
   () => {
-
     window.location.reload();
-
   },
   10000
 );
 
 </script>
 
-
 </body>
-
 </html>
 `;
 
