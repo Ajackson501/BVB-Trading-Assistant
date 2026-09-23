@@ -1,5 +1,5 @@
 const express = require("express");
-
+const WebSocket = require("ws");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -9,7 +9,68 @@ const ALPACA_API_KEY = process.env.ALPACA_API_KEY;
 const ALPACA_SECRET_KEY = process.env.ALPACA_SECRET_KEY;
 console.log("API key loaded:", Boolean(ALPACA_API_KEY));
 console.log("Secret key loaded:", Boolean(ALPACA_SECRET_KEY));
+let latestGOOGLTrade = null;
+let alpacaStreamStatus = "connecting";
 
+function connectAlpacaStream() {
+  const ws = new WebSocket("wss://stream.data.alpaca.markets/v2/iex");
+
+  ws.on("open", () => {
+    console.log("Alpaca WebSocket connected");
+
+    ws.send(JSON.stringify({
+      action: "auth",
+      key: ALPACA_API_KEY,
+      secret: ALPACA_SECRET_KEY
+    }));
+  });
+
+  ws.on("message", (data) => {
+    const messages = JSON.parse(data.toString());
+
+    for (const message of messages) {
+      if (message.T === "success" && message.msg === "authenticated") {
+        alpacaStreamStatus = "connected";
+
+        ws.send(JSON.stringify({
+          action: "subscribe",
+          trades: ["GOOGL"]
+        }));
+
+        console.log("Subscribed to live GOOGL trades");
+      }
+
+      if (message.T === "t" && message.S === "GOOGL") {
+        latestGOOGLTrade = {
+          price: message.p,
+          size: message.s,
+          time: message.t
+        };
+      }
+    }
+  });
+
+  ws.on("error", (error) => {
+    console.error("Alpaca WebSocket error:", error.message);
+    alpacaStreamStatus = "error";
+  });
+
+  ws.on("close", () => {
+    console.log("Alpaca WebSocket disconnected");
+    alpacaStreamStatus = "disconnected";
+
+    setTimeout(connectAlpacaStream, 5000);
+  });
+}
+
+connectAlpacaStream();
+app.get("/googl-live", (req, res) => {
+  res.json({
+    symbol: "GOOGL",
+    streamStatus: alpacaStreamStatus,
+    latestTrade: latestGOOGLTrade
+  });
+});
 app.get("/", (req, res) => {
   res.json({
     status: "online",
