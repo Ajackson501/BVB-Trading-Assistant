@@ -2050,7 +2050,1482 @@ function analyzeOliver(candles) {
   };
 }
 
+// ==================================================
+// BVB V2 — TUG-OF-WAR TREND ENGINE
+// ==================================================
+//
+// Purpose:
+// Detect:
+// 1. Who controls the trend — Bulls / Bears / Neutral
+// 2. How strong that control is
+// 3. Whether a trend is early, active, weakening, or extended
+// 4. Heikin-Ashi trend behavior
+// 5. Potential direction-change / exhaustion warnings
+//
+// IMPORTANT:
+// - Uses completed candles only.
+// - HA is used for trend interpretation.
+// - Real OHLC candles remain the source for executable
+//   entry / invalidation prices.
+// - Oliver V1.1 remains intact.
+// ==================================================
 
+
+// --------------------------------------------------
+// BUILD HEIKIN-ASHI FROM COMPLETED REAL CANDLES
+// --------------------------------------------------
+
+function buildHeikinAshi(candles) {
+
+  if (
+    !Array.isArray(candles) ||
+    candles.length === 0
+  ) {
+    return [];
+  }
+
+  let previousHAOpen = null;
+  let previousHAClose = null;
+
+  return candles.map(
+    (candle, index) => {
+
+      const open =
+        Number(candle.open);
+
+      const high =
+        Number(candle.high);
+
+      const low =
+        Number(candle.low);
+
+      const close =
+        Number(candle.close);
+
+
+      const haClose =
+        (
+          open +
+          high +
+          low +
+          close
+        ) / 4;
+
+
+      let haOpen;
+
+
+      if (index === 0) {
+
+        haOpen =
+          (
+            open +
+            close
+          ) / 2;
+
+      } else {
+
+        haOpen =
+          (
+            previousHAOpen +
+            previousHAClose
+          ) / 2;
+
+      }
+
+
+      const haHigh =
+        Math.max(
+          high,
+          haOpen,
+          haClose
+        );
+
+
+      const haLow =
+        Math.min(
+          low,
+          haOpen,
+          haClose
+        );
+
+
+      const body =
+        Math.abs(
+          haClose -
+          haOpen
+        );
+
+
+      const range =
+        Math.max(
+          haHigh -
+          haLow,
+          0
+        );
+
+
+      const upperWick =
+        Math.max(
+          haHigh -
+          Math.max(
+            haOpen,
+            haClose
+          ),
+          0
+        );
+
+
+      const lowerWick =
+        Math.max(
+          Math.min(
+            haOpen,
+            haClose
+          ) -
+          haLow,
+          0
+        );
+
+
+      const color =
+        haClose > haOpen
+          ? "GREEN"
+          : haClose < haOpen
+          ? "RED"
+          : "DOJI";
+
+
+      // A relative doji test is better than requiring
+      // the open and close to be exactly equal.
+
+      const isDoji =
+        range > 0 &&
+        body / range <= 0.25;
+
+
+      // "No wick" needs a tolerance because market
+      // prices rarely produce perfect mathematical zero.
+
+      const wickTolerance =
+        Math.max(
+          range * 0.08,
+          0.01
+        );
+
+
+      const noLowerWick =
+        lowerWick <=
+        wickTolerance;
+
+
+      const noUpperWick =
+        upperWick <=
+        wickTolerance;
+
+
+      previousHAOpen =
+        haOpen;
+
+      previousHAClose =
+        haClose;
+
+
+      return {
+
+        time:
+          candle.time,
+
+        open:
+          haOpen,
+
+        high:
+          haHigh,
+
+        low:
+          haLow,
+
+        close:
+          haClose,
+
+        color,
+
+        body,
+
+        range,
+
+        upperWick,
+
+        lowerWick,
+
+        isDoji,
+
+        noLowerWick,
+
+        noUpperWick
+
+      };
+
+    }
+  );
+
+}
+
+
+// --------------------------------------------------
+// CURRENT HA RUN
+// --------------------------------------------------
+
+function getHARun(haCandles) {
+
+  if (
+    !Array.isArray(haCandles) ||
+    haCandles.length === 0
+  ) {
+
+    return {
+      color: "NONE",
+      count: 0
+    };
+
+  }
+
+
+  const last =
+    haCandles[
+      haCandles.length - 1
+    ];
+
+
+  if (
+    last.color !== "GREEN" &&
+    last.color !== "RED"
+  ) {
+
+    return {
+      color: last.color,
+      count: 1
+    };
+
+  }
+
+
+  let count = 0;
+
+
+  for (
+    let i =
+      haCandles.length - 1;
+
+    i >= 0;
+
+    i--
+  ) {
+
+    if (
+      haCandles[i].color !==
+      last.color
+    ) {
+      break;
+    }
+
+    count++;
+
+  }
+
+
+  return {
+    color:
+      last.color,
+
+    count
+  };
+
+}
+
+
+// --------------------------------------------------
+// HA BODY TREND
+// --------------------------------------------------
+
+function getHABodyMomentum(
+  haCandles
+) {
+
+  if (
+    !Array.isArray(haCandles) ||
+    haCandles.length < 3
+  ) {
+    return "UNKNOWN";
+  }
+
+
+  const a =
+    haCandles[
+      haCandles.length - 3
+    ].body;
+
+
+  const b =
+    haCandles[
+      haCandles.length - 2
+    ].body;
+
+
+  const c =
+    haCandles[
+      haCandles.length - 1
+    ].body;
+
+
+  if (
+    c > b &&
+    b >= a
+  ) {
+    return "EXPANDING";
+  }
+
+
+  if (
+    c < b &&
+    b <= a
+  ) {
+    return "SHRINKING";
+  }
+
+
+  return "MIXED";
+}
+
+
+// --------------------------------------------------
+// TREND BATTLE ANALYSIS
+// --------------------------------------------------
+
+function analyzeTrendBattle(
+  candles
+) {
+
+  if (
+    !Array.isArray(candles) ||
+    candles.length < 21
+  ) {
+
+    return {
+
+      control:
+        "NEUTRAL",
+
+      pressure:
+        "WAITING",
+
+      ropePosition:
+        0,
+
+      phase:
+        "WAIT",
+
+      action:
+        "WAIT",
+
+      reason:
+        "Need at least 21 completed candles."
+
+    };
+
+  }
+
+
+  // Oliver remains one of the underlying engines.
+
+  const oliver =
+    analyzeOliver(candles);
+
+
+  const current =
+    candles[
+      candles.length - 1
+    ];
+
+
+  const price =
+    Number(
+      current.close
+    );
+
+
+  const haCandles =
+    buildHeikinAshi(
+      candles
+    );
+
+
+  const currentHA =
+    haCandles[
+      haCandles.length - 1
+    ];
+
+
+  const previousHA =
+    haCandles.length >= 2
+      ? haCandles[
+          haCandles.length - 2
+        ]
+      : null;
+
+
+  const haRun =
+    getHARun(
+      haCandles
+    );
+
+
+  const haBodyMomentum =
+    getHABodyMomentum(
+      haCandles
+    );
+
+
+  // ------------------------------------------------
+  // PRESSURE SCORE
+  //
+  // Negative = Bears
+  // Positive = Bulls
+  //
+  // This is NOT probability.
+  // It drives the tug-of-war visualization.
+  // ------------------------------------------------
+
+  let score = 0;
+
+  const bullReasons = [];
+  const bearReasons = [];
+
+
+  // ------------------------------------------------
+  // OLIVER STATE
+  // ------------------------------------------------
+
+  if (
+    oliver.state ===
+    "BULLISH"
+  ) {
+
+    score += 18;
+
+    bullReasons.push(
+      "Oliver bullish state"
+    );
+  }
+
+
+  if (
+    oliver.state ===
+    "BEARISH"
+  ) {
+
+    score -= 18;
+
+    bearReasons.push(
+      "Oliver bearish state"
+    );
+  }
+
+
+  // ------------------------------------------------
+  // STRUCTURE
+  // ------------------------------------------------
+
+  if (
+    oliver.structure ===
+    "HH_HL"
+  ) {
+
+    score += 14;
+
+    bullReasons.push(
+      "HH/HL structure"
+    );
+  }
+
+
+  if (
+    oliver.structure ===
+    "LH_LL"
+  ) {
+
+    score -= 14;
+
+    bearReasons.push(
+      "LH/LL structure"
+    );
+  }
+
+
+  // ------------------------------------------------
+  // TAKEOVER
+  // ------------------------------------------------
+
+  if (
+    oliver.bullishTakeover
+  ) {
+
+    score += 12;
+
+    bullReasons.push(
+      "Bullish takeover"
+    );
+  }
+
+
+  if (
+    oliver.bearishTakeover
+  ) {
+
+    score -= 12;
+
+    bearReasons.push(
+      "Bearish takeover"
+    );
+  }
+
+
+  // ------------------------------------------------
+  // OLIVER ENTRY EVENTS
+  // ------------------------------------------------
+
+  if (
+    typeof oliver.entryEvent ===
+      "string" &&
+    oliver.entryEvent.startsWith(
+      "BULLISH"
+    )
+  ) {
+
+    score += 16;
+
+    bullReasons.push(
+      "Bullish Oliver entry event"
+    );
+  }
+
+
+  if (
+    typeof oliver.entryEvent ===
+      "string" &&
+    oliver.entryEvent.startsWith(
+      "BEARISH"
+    )
+  ) {
+
+    score -= 16;
+
+    bearReasons.push(
+      "Bearish Oliver entry event"
+    );
+  }
+
+
+  // ------------------------------------------------
+  // HEIKIN-ASHI CONTROL
+  // ------------------------------------------------
+
+  if (
+    currentHA.color ===
+    "GREEN"
+  ) {
+
+    score += 10;
+
+    bullReasons.push(
+      "Green HA control"
+    );
+  }
+
+
+  if (
+    currentHA.color ===
+    "RED"
+  ) {
+
+    score -= 10;
+
+    bearReasons.push(
+      "Red HA control"
+    );
+  }
+
+
+  // ------------------------------------------------
+  // CONSECUTIVE HA RUN
+  // ------------------------------------------------
+
+  if (
+    haRun.color ===
+    "GREEN"
+  ) {
+
+    const runBonus =
+      Math.min(
+        haRun.count * 4,
+        20
+      );
+
+
+    score +=
+      runBonus;
+
+
+    if (
+      haRun.count >= 2
+    ) {
+
+      bullReasons.push(
+        `${haRun.count} green HA candles`
+      );
+
+    }
+
+  }
+
+
+  if (
+    haRun.color ===
+    "RED"
+  ) {
+
+    const runBonus =
+      Math.min(
+        haRun.count * 4,
+        20
+      );
+
+
+    score -=
+      runBonus;
+
+
+    if (
+      haRun.count >= 2
+    ) {
+
+      bearReasons.push(
+        `${haRun.count} red HA candles`
+      );
+
+    }
+
+  }
+
+
+  // ------------------------------------------------
+  // NO OPPOSITE WICK = CONVICTION
+  // ------------------------------------------------
+
+  if (
+    currentHA.color ===
+      "GREEN" &&
+    currentHA.noLowerWick
+  ) {
+
+    score += 10;
+
+    bullReasons.push(
+      "Green HA has no lower wick"
+    );
+  }
+
+
+  if (
+    currentHA.color ===
+      "RED" &&
+    currentHA.noUpperWick
+  ) {
+
+    score -= 10;
+
+    bearReasons.push(
+      "Red HA has no upper wick"
+    );
+  }
+
+
+  // ------------------------------------------------
+  // EXPANSION
+  // ------------------------------------------------
+
+  if (
+    oliver.expansion ===
+    "GREEN"
+  ) {
+
+    score += 8;
+
+    bullReasons.push(
+      "Bullish expansion"
+    );
+  }
+
+
+  if (
+    oliver.expansion ===
+    "RED"
+  ) {
+
+    score -= 8;
+
+    bearReasons.push(
+      "Bearish expansion"
+    );
+  }
+
+
+  // ------------------------------------------------
+  // 200 SMA CONTEXT
+  //
+  // Deliberately lighter weighting.
+  // We want context without allowing the 200 SMA
+  // to automatically veto an intraday trend.
+  // ------------------------------------------------
+
+  if (
+    oliver.sma200Context ===
+    "ABOVE_200"
+  ) {
+
+    score += 6;
+
+    bullReasons.push(
+      "Price above 200 SMA"
+    );
+  }
+
+
+  if (
+    oliver.sma200Context ===
+    "BELOW_200"
+  ) {
+
+    score -= 6;
+
+    bearReasons.push(
+      "Price below 200 SMA"
+    );
+  }
+
+
+  // ------------------------------------------------
+  // CAP SCORE
+  // ------------------------------------------------
+
+  score =
+    Math.max(
+      -100,
+      Math.min(
+        100,
+        score
+      )
+    );
+
+
+  // ------------------------------------------------
+  // CONTROL
+  // ------------------------------------------------
+
+  let control =
+    "NEUTRAL";
+
+
+  if (
+    score >= 15
+  ) {
+    control =
+      "BULLS";
+  }
+
+
+  if (
+    score <= -15
+  ) {
+    control =
+      "BEARS";
+  }
+
+
+  // ------------------------------------------------
+  // PRESSURE LABEL
+  // ------------------------------------------------
+
+  const absoluteScore =
+    Math.abs(score);
+
+
+  let pressure =
+    "BALANCED";
+
+
+  if (
+    absoluteScore >= 75
+  ) {
+
+    pressure =
+      "DOMINANT";
+
+  } else if (
+    absoluteScore >= 55
+  ) {
+
+    pressure =
+      "STRONG";
+
+  } else if (
+    absoluteScore >= 35
+  ) {
+
+    pressure =
+      "CONTROL";
+
+  } else if (
+    absoluteScore >= 15
+  ) {
+
+    pressure =
+      "EARLY";
+
+  }
+
+
+  // ------------------------------------------------
+  // HA CONTROL
+  // ------------------------------------------------
+
+  let haControl =
+    "INDECISION";
+
+
+  if (
+    currentHA.color ===
+      "GREEN"
+  ) {
+
+    haControl =
+      currentHA.noLowerWick
+        ? "BUYERS_STRONG"
+        : "BUYERS";
+
+  }
+
+
+  if (
+    currentHA.color ===
+      "RED"
+  ) {
+
+    haControl =
+      currentHA.noUpperWick
+        ? "SELLERS_STRONG"
+        : "SELLERS";
+
+  }
+
+
+  if (
+    currentHA.isDoji
+  ) {
+
+    haControl =
+      "INDECISION";
+
+  }
+
+
+  // ------------------------------------------------
+  // EXHAUSTION EVIDENCE
+  // ------------------------------------------------
+
+  let bullExhaustion = 0;
+  let bearExhaustion = 0;
+
+  const exhaustionReasons = [];
+
+
+  // Bulls currently control:
+  // look for evidence that bullish control is fading.
+
+  if (
+    control === "BULLS"
+  ) {
+
+    if (
+      currentHA.isDoji
+    ) {
+
+      bullExhaustion++;
+
+      exhaustionReasons.push(
+        "HA indecision"
+      );
+
+    }
+
+
+    if (
+      currentHA.color ===
+        "GREEN" &&
+      !currentHA.noLowerWick
+    ) {
+
+      bullExhaustion++;
+
+      exhaustionReasons.push(
+        "Lower HA wick developing"
+      );
+
+    }
+
+
+    if (
+      haBodyMomentum ===
+        "SHRINKING"
+    ) {
+
+      bullExhaustion++;
+
+      exhaustionReasons.push(
+        "HA bodies shrinking"
+      );
+
+    }
+
+
+    if (
+      previousHA &&
+      previousHA.color ===
+        "GREEN" &&
+      currentHA.color ===
+        "RED"
+    ) {
+
+      bullExhaustion += 2;
+
+      exhaustionReasons.push(
+        "HA changed red"
+      );
+
+    }
+
+
+    if (
+      Number.isFinite(
+        Number(oliver.sma8)
+      ) &&
+      price <
+        Number(oliver.sma8)
+    ) {
+
+      bullExhaustion++;
+
+      exhaustionReasons.push(
+        "Price below 8 SMA"
+      );
+
+    }
+
+
+    if (
+      oliver.bearishTakeover
+    ) {
+
+      bullExhaustion += 2;
+
+      exhaustionReasons.push(
+        "Bearish takeover"
+      );
+
+    }
+
+  }
+
+
+  // Bears currently control:
+  // look for evidence that bearish control is fading.
+
+  if (
+    control === "BEARS"
+  ) {
+
+    if (
+      currentHA.isDoji
+    ) {
+
+      bearExhaustion++;
+
+      exhaustionReasons.push(
+        "HA indecision"
+      );
+
+    }
+
+
+    if (
+      currentHA.color ===
+        "RED" &&
+      !currentHA.noUpperWick
+    ) {
+
+      bearExhaustion++;
+
+      exhaustionReasons.push(
+        "Upper HA wick developing"
+      );
+
+    }
+
+
+    if (
+      haBodyMomentum ===
+        "SHRINKING"
+    ) {
+
+      bearExhaustion++;
+
+      exhaustionReasons.push(
+        "HA bodies shrinking"
+      );
+
+    }
+
+
+    if (
+      previousHA &&
+      previousHA.color ===
+        "RED" &&
+      currentHA.color ===
+        "GREEN"
+    ) {
+
+      bearExhaustion += 2;
+
+      exhaustionReasons.push(
+        "HA changed green"
+      );
+
+    }
+
+
+    if (
+      Number.isFinite(
+        Number(oliver.sma8)
+      ) &&
+      price >
+        Number(oliver.sma8)
+    ) {
+
+      bearExhaustion++;
+
+      exhaustionReasons.push(
+        "Price above 8 SMA"
+      );
+
+    }
+
+
+    if (
+      oliver.bullishTakeover
+    ) {
+
+      bearExhaustion += 2;
+
+      exhaustionReasons.push(
+        "Bullish takeover"
+      );
+
+    }
+
+  }
+
+
+  const exhaustionScore =
+    control === "BULLS"
+      ? bullExhaustion
+      : control === "BEARS"
+      ? bearExhaustion
+      : 0;
+
+
+  // ------------------------------------------------
+  // CHANGE WATCH
+  // ------------------------------------------------
+
+  let changeWatch =
+    "OFF";
+
+
+  if (
+    exhaustionScore >= 2
+  ) {
+
+    changeWatch =
+      "WATCH";
+
+  }
+
+
+  if (
+    exhaustionScore >= 4
+  ) {
+
+    changeWatch =
+      "WARNING";
+
+  }
+
+
+  // ------------------------------------------------
+  // TREND PHASE
+  // ------------------------------------------------
+
+  let phase =
+    "NEUTRAL";
+
+
+  if (
+    control !== "NEUTRAL" &&
+    absoluteScore >= 15 &&
+    absoluteScore < 35
+  ) {
+
+    phase =
+      "EARLY";
+
+  }
+
+
+  if (
+    control !== "NEUTRAL" &&
+    absoluteScore >= 35 &&
+    absoluteScore < 55
+  ) {
+
+    phase =
+      "DEVELOPING";
+
+  }
+
+
+  if (
+    control !== "NEUTRAL" &&
+    absoluteScore >= 55
+  ) {
+
+    phase =
+      "ACTIVE";
+
+  }
+
+
+  if (
+    control !== "NEUTRAL" &&
+    haRun.count >= 6 &&
+    absoluteScore >= 55
+  ) {
+
+    phase =
+      "EXTENDED";
+
+  }
+
+
+  if (
+    changeWatch ===
+      "WATCH"
+  ) {
+
+    phase =
+      "WEAKENING";
+
+  }
+
+
+  if (
+    changeWatch ===
+      "WARNING"
+  ) {
+
+    phase =
+      "REVERSAL_WATCH";
+
+  }
+
+
+  // ------------------------------------------------
+  // ENTRY INFORMATION
+  //
+  // Actual entry prices always come from Oliver's
+  // REAL candle trigger, never HA synthetic prices.
+  // ------------------------------------------------
+
+  let entryReady = false;
+
+  let entryDirection =
+    null;
+
+  let entryPrice =
+    null;
+
+  let invalidation =
+    null;
+
+
+  if (
+    oliver.action ===
+    "CALL_SETUP"
+  ) {
+
+    entryReady = true;
+
+    entryDirection =
+      "CALL";
+
+    entryPrice =
+      oliver.trigger;
+
+    invalidation =
+      oliver.invalidation;
+
+  }
+
+
+  if (
+    oliver.action ===
+    "PUT_SETUP"
+  ) {
+
+    entryReady = true;
+
+    entryDirection =
+      "PUT";
+
+    entryPrice =
+      oliver.trigger;
+
+    invalidation =
+      oliver.invalidation;
+
+  }
+
+
+  // ------------------------------------------------
+  // ACTION
+  // ------------------------------------------------
+
+  let action =
+    "WAIT";
+
+
+  if (
+    control === "BULLS"
+  ) {
+
+    if (
+      changeWatch ===
+      "WARNING"
+    ) {
+
+      action =
+        "BULL_TREND_EXIT_WARNING";
+
+    } else if (
+      changeWatch ===
+      "WATCH"
+    ) {
+
+      action =
+        "HOLD_BULL_WATCH";
+
+    } else if (
+      entryReady &&
+      entryDirection ===
+        "CALL"
+    ) {
+
+      action =
+        "CALL_ENTRY_READY";
+
+    } else {
+
+      action =
+        "HOLD_BULL_TREND";
+
+    }
+
+  }
+
+
+  if (
+    control === "BEARS"
+  ) {
+
+    if (
+      changeWatch ===
+      "WARNING"
+    ) {
+
+      action =
+        "BEAR_TREND_EXIT_WARNING";
+
+    } else if (
+      changeWatch ===
+      "WATCH"
+    ) {
+
+      action =
+        "HOLD_BEAR_WATCH";
+
+    } else if (
+      entryReady &&
+      entryDirection ===
+        "PUT"
+    ) {
+
+      action =
+        "PUT_ENTRY_READY";
+
+    } else {
+
+      action =
+        "HOLD_BEAR_TREND";
+
+    }
+
+  }
+
+
+  // ------------------------------------------------
+  // 200 SMA DISPLAY CONTEXT
+  // ------------------------------------------------
+
+  let sma200Context =
+    "UNAVAILABLE";
+
+
+  if (
+    oliver.sma200Context ===
+      "ABOVE_200"
+  ) {
+
+    sma200Context =
+      control === "BULLS"
+        ? "WITH_TREND"
+        : "COUNTER_TREND";
+
+  }
+
+
+  if (
+    oliver.sma200Context ===
+      "BELOW_200"
+  ) {
+
+    sma200Context =
+      control === "BEARS"
+        ? "WITH_TREND"
+        : "COUNTER_TREND";
+
+  }
+
+
+  // ------------------------------------------------
+  // RESULT
+  // ------------------------------------------------
+
+  return {
+
+    control,
+
+    pressure,
+
+    // -100 = maximum Bear pull
+    // 0 = center
+    // +100 = maximum Bull pull
+
+    ropePosition:
+      score,
+
+    phase,
+
+    action,
+
+    price:
+      Number(
+        price.toFixed(4)
+      ),
+
+    haControl,
+
+    haColor:
+      currentHA.color,
+
+    haRunColor:
+      haRun.color,
+
+    haRunCandles:
+      haRun.count,
+
+    haBodyMomentum,
+
+    haDoji:
+      currentHA.isDoji,
+
+    haNoLowerWick:
+      currentHA.noLowerWick,
+
+    haNoUpperWick:
+      currentHA.noUpperWick,
+
+    changeWatch,
+
+    exhaustionScore,
+
+    exhaustionReasons,
+
+    entryReady,
+
+    entryDirection,
+
+    entryPrice,
+
+    invalidation,
+
+    entryEvent:
+      oliver.entryEvent ||
+      "NONE",
+
+    sma8:
+      oliver.sma8,
+
+    sma20:
+      oliver.sma20,
+
+    sma200:
+      oliver.sma200,
+
+    sma200Context,
+
+    structure:
+      oliver.structure,
+
+    bullEvidence:
+      bullReasons,
+
+    bearEvidence:
+      bearReasons,
+
+    analyzedCandle:
+      current.time
+
+  };
+
+}
 // ==================================================
 // START MARKET DATA SYSTEM
 // ==================================================
