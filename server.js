@@ -22,7 +22,6 @@ let alpacaStreamStatus = "connecting";
 
 let developingCandle = null;
 
-// Rolling history of completed 2-minute candles.
 let completedCandles = [];
 
 const MAX_COMPLETED_CANDLES = 200;
@@ -36,538 +35,64 @@ let historySeeded = false;
 
 let alpacaWS = null;
 let reconnectTimer = null;
-let reconnectEnabled = true;
+
+// Normal disconnect retry
+const NORMAL_RECONNECT_DELAY = 5000;
+
+// Longer retry for Alpaca 406.
+// This gives the previous Render instance time to shut down.
+const CONNECTION_LIMIT_RETRY_DELAY = 15000;
 
 
 // ==================================================
-// BASIC HELPERS
+// NORMALIZE ALPACA BAR
 // ==================================================
-
-function round(value, decimals = 4) {
-
-  if (!Number.isFinite(value)) {
-    return null;
-  }
-
-  return Number(
-    value.toFixed(decimals)
-  );
-}
-
 
 function normalizeBar(bar) {
 
   return {
+
     time: bar.t,
+
     open: Number(bar.o),
+
     high: Number(bar.h),
+
     low: Number(bar.l),
+
     close: Number(bar.c),
+
     volume: Number(bar.v) || 0
-  };
-}
-
-
-// ==================================================
-// SMA CALCULATION
-// ==================================================
-
-function calculateSMA(
-  candles,
-  period
-) {
-
-  if (
-    !Array.isArray(candles) ||
-    candles.length < period
-  ) {
-
-    return null;
-  }
-
-
-  const selected =
-    candles.slice(-period);
-
-
-  const total =
-    selected.reduce(
-      (sum, candle) =>
-        sum + Number(candle.close),
-      0
-    );
-
-
-  return total / period;
-}
-
-
-// ==================================================
-// SMA VALUE AT A PARTICULAR POINT IN HISTORY
-// ==================================================
-
-function calculateSMAAtIndex(
-  candles,
-  period,
-  index
-) {
-
-  if (
-    index < period - 1
-  ) {
-
-    return null;
-  }
-
-
-  const start =
-    index - period + 1;
-
-
-  const selected =
-    candles.slice(
-      start,
-      index + 1
-    );
-
-
-  const total =
-    selected.reduce(
-      (sum, candle) =>
-        sum + Number(candle.close),
-      0
-    );
-
-
-  return total / period;
-}
-
-
-// ==================================================
-// OLIVER 8 / 20 SMA ANALYSIS
-// ==================================================
-
-function buildOliverAnalysis() {
-
-  if (
-    completedCandles.length < 20
-  ) {
-
-    return {
-
-      ready: false,
-
-      reason:
-        "At least 20 completed candles are required.",
-
-      candleCount:
-        completedCandles.length
-
-    };
-  }
-
-
-  const lastIndex =
-    completedCandles.length - 1;
-
-
-  const previousIndex =
-    lastIndex - 1;
-
-
-  const latestCandle =
-    completedCandles[lastIndex];
-
-
-  const previousCandle =
-    completedCandles[previousIndex];
-
-
-  const sma8 =
-    calculateSMA(
-      completedCandles,
-      8
-    );
-
-
-  const sma20 =
-    calculateSMA(
-      completedCandles,
-      20
-    );
-
-
-  const previousSMA8 =
-    calculateSMAAtIndex(
-      completedCandles,
-      8,
-      previousIndex
-    );
-
-
-  const previousSMA20 =
-    calculateSMAAtIndex(
-      completedCandles,
-      20,
-      previousIndex
-    );
-
-
-  // -----------------------------------------------
-  // SMA DIRECTION
-  // -----------------------------------------------
-
-  let sma8Direction =
-    "FLAT";
-
-
-  if (
-    sma8 > previousSMA8
-  ) {
-
-    sma8Direction =
-      "RISING";
-
-  } else if (
-    sma8 < previousSMA8
-  ) {
-
-    sma8Direction =
-      "FALLING";
-
-  }
-
-
-  let sma20Direction =
-    "FLAT";
-
-
-  if (
-    sma20 > previousSMA20
-  ) {
-
-    sma20Direction =
-      "RISING";
-
-  } else if (
-    sma20 < previousSMA20
-  ) {
-
-    sma20Direction =
-      "FALLING";
-
-  }
-
-
-  // -----------------------------------------------
-  // PRICE LOCATION
-  // -----------------------------------------------
-
-  let priceLocation =
-    "BETWEEN_8_AND_20";
-
-
-  if (
-    latestCandle.close >
-      Math.max(
-        sma8,
-        sma20
-      )
-  ) {
-
-    priceLocation =
-      "ABOVE_8_AND_20";
-
-  } else if (
-    latestCandle.close <
-      Math.min(
-        sma8,
-        sma20
-      )
-  ) {
-
-    priceLocation =
-      "BELOW_8_AND_20";
-
-  }
-
-
-  // -----------------------------------------------
-  // BASIC TREND STATE
-  // -----------------------------------------------
-
-  let trendState =
-    "MIXED";
-
-
-  if (
-    latestCandle.close > sma8 &&
-    sma8 > sma20 &&
-    sma8Direction === "RISING" &&
-    sma20Direction === "RISING"
-  ) {
-
-    trendState =
-      "BULLISH";
-
-  }
-
-
-  if (
-    latestCandle.close < sma8 &&
-    sma8 < sma20 &&
-    sma8Direction === "FALLING" &&
-    sma20Direction === "FALLING"
-  ) {
-
-    trendState =
-      "BEARISH";
-
-  }
-
-
-  // -----------------------------------------------
-  // CANDLE DIRECTION
-  // -----------------------------------------------
-
-  const latestBullish =
-    latestCandle.close >
-    latestCandle.open;
-
-
-  const latestBearish =
-    latestCandle.close <
-    latestCandle.open;
-
-
-  const previousBullish =
-    previousCandle.close >
-    previousCandle.open;
-
-
-  const previousBearish =
-    previousCandle.close <
-    previousCandle.open;
-
-
-  // -----------------------------------------------
-  // OLIVER TAKEOVER CANDLE
-  //
-  // Bullish:
-  // Current green candle takes out previous red body.
-  //
-  // Bearish:
-  // Current red candle takes out previous green body.
-  // -----------------------------------------------
-
-  const bullishTakeover =
-    previousBearish &&
-    latestBullish &&
-    latestCandle.close >
-      previousCandle.open;
-
-
-  const bearishTakeover =
-    previousBullish &&
-    latestBearish &&
-    latestCandle.close <
-      previousCandle.open;
-
-
-  // -----------------------------------------------
-  // PROXIMITY TO 8 / 20 SMA AREA
-  //
-  // We don't want to pretend that every takeover
-  // candle matters.
-  //
-  // This identifies whether the latest candle
-  // interacted with the 8 or 20 SMA area.
-  // -----------------------------------------------
-
-  const touched8 =
-    latestCandle.low <= sma8 &&
-    latestCandle.high >= sma8;
-
-
-  const touched20 =
-    latestCandle.low <= sma20 &&
-    latestCandle.high >= sma20;
-
-
-  const nearOliverSMAZone =
-    touched8 ||
-    touched20;
-
-
-  // -----------------------------------------------
-  // INITIAL OLIVER EVENT
-  // -----------------------------------------------
-
-  let event =
-    "NONE";
-
-
-  if (
-    bullishTakeover &&
-    nearOliverSMAZone
-  ) {
-
-    event =
-      "BULLISH_TAKEOVER_NEAR_SMA";
-
-  }
-
-
-  if (
-    bearishTakeover &&
-    nearOliverSMAZone
-  ) {
-
-    event =
-      "BEARISH_TAKEOVER_NEAR_SMA";
-
-  }
-
-
-  // -----------------------------------------------
-  // INITIAL BIAS
-  //
-  // IMPORTANT:
-  // This is NOT an automatic trade signal.
-  // -----------------------------------------------
-
-  let bias =
-    "WAIT";
-
-
-  if (
-    trendState === "BULLISH"
-  ) {
-
-    bias =
-      "CALL_BIAS";
-
-  }
-
-
-  if (
-    trendState === "BEARISH"
-  ) {
-
-    bias =
-      "PUT_BIAS";
-
-  }
-
-
-  return {
-
-    ready: true,
-
-    symbol:
-      "GOOGL",
-
-    timeframe:
-      "2Min",
-
-    candleTime:
-      latestCandle.time,
-
-    candleCount:
-      completedCandles.length,
-
-    latestCandle,
-
-    sma: {
-
-      sma8:
-        round(sma8),
-
-      sma20:
-        round(sma20),
-
-      sma8Direction,
-
-      sma20Direction,
-
-      spread:
-        round(
-          sma8 - sma20
-        )
-
-    },
-
-    state: {
-
-      trend:
-        trendState,
-
-      priceLocation,
-
-      bias
-
-    },
-
-    event: {
-
-      type:
-        event,
-
-      bullishTakeover,
-
-      bearishTakeover,
-
-      touched8SMA:
-        touched8,
-
-      touched20SMA:
-        touched20,
-
-      nearOliverSMAZone
-
-    },
-
-    note:
-      "Observation only. Bias is not an automatic trade entry."
 
   };
+
 }
 
 
 // ==================================================
-// ADD COMPLETED CANDLE TO ROLLING BUFFER
+// ADD COMPLETED CANDLE
 // ==================================================
 
 function addCompletedCandle(candle) {
 
-  if (
-    !candle ||
-    !candle.time
-  ) {
-
+  if (!candle || !candle.time) {
     return;
   }
 
 
   const normalized = {
 
-    time:
-      candle.time,
+    time: candle.time,
 
-    open:
-      Number(candle.open),
+    open: Number(candle.open),
 
-    high:
-      Number(candle.high),
+    high: Number(candle.high),
 
-    low:
-      Number(candle.low),
+    low: Number(candle.low),
 
-    close:
-      Number(candle.close),
+    close: Number(candle.close),
 
-    volume:
-      Number(candle.volume) || 0
+    volume: Number(candle.volume) || 0
 
   };
 
@@ -575,18 +100,14 @@ function addCompletedCandle(candle) {
   const existingIndex =
     completedCandles.findIndex(
       (bar) =>
-        bar.time ===
-        normalized.time
+        bar.time === normalized.time
     );
 
 
-  if (
-    existingIndex !== -1
-  ) {
+  if (existingIndex !== -1) {
 
-    completedCandles[
-      existingIndex
-    ] = normalized;
+    completedCandles[existingIndex] =
+      normalized;
 
   } else {
 
@@ -615,6 +136,7 @@ function addCompletedCandle(candle) {
       );
 
   }
+
 }
 
 
@@ -652,7 +174,6 @@ async function seedHistoricalCandles() {
       await fetch(
         url,
         {
-
           headers: {
 
             "APCA-API-KEY-ID":
@@ -662,7 +183,6 @@ async function seedHistoricalCandles() {
               ALPACA_SECRET_KEY
 
           }
-
         }
       );
 
@@ -671,9 +191,7 @@ async function seedHistoricalCandles() {
       await response.json();
 
 
-    if (
-      !response.ok
-    ) {
+    if (!response.ok) {
 
       console.error(
         "Historical seed failed:",
@@ -718,6 +236,7 @@ async function seedHistoricalCandles() {
     );
 
   }
+
 }
 
 
@@ -745,6 +264,7 @@ function updateDevelopingCandle(trade) {
   ) {
 
     return;
+
   }
 
 
@@ -769,9 +289,9 @@ function updateDevelopingCandle(trade) {
     bucket.toISOString();
 
 
-  // -----------------------------------------------
+  // ------------------------------------------------
   // NEW 2-MINUTE PERIOD
-  // -----------------------------------------------
+  // ------------------------------------------------
 
   if (
     !developingCandle ||
@@ -780,9 +300,7 @@ function updateDevelopingCandle(trade) {
   ) {
 
 
-    if (
-      developingCandle
-    ) {
+    if (developingCandle) {
 
       addCompletedCandle(
         developingCandle
@@ -796,64 +314,22 @@ function updateDevelopingCandle(trade) {
         )
       );
 
-
-      // Print Oliver's current interpretation
-      // whenever a candle closes.
-      const analysis =
-        buildOliverAnalysis();
-
-
-      if (
-        analysis.ready
-      ) {
-
-        console.log(
-          "OLIVER:",
-          JSON.stringify({
-            time:
-              analysis.candleTime,
-
-            trend:
-              analysis.state.trend,
-
-            bias:
-              analysis.state.bias,
-
-            sma8:
-              analysis.sma.sma8,
-
-            sma20:
-              analysis.sma.sma20,
-
-            event:
-              analysis.event.type
-          })
-        );
-
-      }
-
     }
 
 
     developingCandle = {
 
-      time:
-        bucketTime,
+      time: bucketTime,
 
-      open:
-        price,
+      open: price,
 
-      high:
-        price,
+      high: price,
 
-      low:
-        price,
+      low: price,
 
-      close:
-        price,
+      close: price,
 
-      volume:
-        size
+      volume: size
 
     };
 
@@ -862,9 +338,9 @@ function updateDevelopingCandle(trade) {
   }
 
 
-  // -----------------------------------------------
+  // ------------------------------------------------
   // UPDATE CURRENT CANDLE
-  // -----------------------------------------------
+  // ------------------------------------------------
 
   developingCandle.high =
     Math.max(
@@ -886,20 +362,19 @@ function updateDevelopingCandle(trade) {
 
   developingCandle.volume +=
     size;
+
 }
 
 
 // ==================================================
-// WEBSOCKET RECONNECT CONTROL
+// RECONNECT SCHEDULER
 // ==================================================
 
-function scheduleReconnect() {
+function scheduleReconnect(
+  delay = NORMAL_RECONNECT_DELAY
+) {
 
-  if (
-    !reconnectEnabled ||
-    reconnectTimer
-  ) {
-
+  if (reconnectTimer) {
     return;
   }
 
@@ -908,18 +383,23 @@ function scheduleReconnect() {
     "reconnecting";
 
 
+  console.log(
+    `Alpaca reconnect scheduled in ${delay / 1000} seconds.`
+  );
+
+
   reconnectTimer =
     setTimeout(
       () => {
 
-        reconnectTimer =
-          null;
+        reconnectTimer = null;
 
         connectAlpacaStream();
 
       },
-      5000
+      delay
     );
+
 }
 
 
@@ -947,6 +427,8 @@ function connectAlpacaStream() {
   }
 
 
+  // Never intentionally open two sockets
+  // inside the same Node process.
   if (
     alpacaWS &&
     (
@@ -958,6 +440,10 @@ function connectAlpacaStream() {
     )
   ) {
 
+    console.log(
+      "Alpaca WebSocket already active. Skipping duplicate connection."
+    );
+
     return;
   }
 
@@ -966,18 +452,26 @@ function connectAlpacaStream() {
     "connecting";
 
 
+  console.log(
+    "Opening Alpaca WebSocket..."
+  );
+
+
   const ws =
     new WebSocket(
       "wss://stream.data.alpaca.markets/v2/iex"
     );
 
 
-  alpacaWS =
-    ws;
+  alpacaWS = ws;
+
+
+  let connectionLimitDetected =
+    false;
 
 
   // ------------------------------------------------
-  // OPEN
+  // SOCKET OPENED
   // ------------------------------------------------
 
   ws.on(
@@ -992,8 +486,7 @@ function connectAlpacaStream() {
       ws.send(
         JSON.stringify({
 
-          action:
-            "auth",
+          action: "auth",
 
           key:
             ALPACA_API_KEY,
@@ -1009,7 +502,7 @@ function connectAlpacaStream() {
 
 
   // ------------------------------------------------
-  // MESSAGE
+  // RECEIVE ALPACA DATA
   // ------------------------------------------------
 
   ws.on(
@@ -1037,15 +530,8 @@ function connectAlpacaStream() {
       }
 
 
-      if (
-        !Array.isArray(
-          messages
-        )
-      ) {
-
-        messages =
-          [messages];
-
+      if (!Array.isArray(messages)) {
+        messages = [messages];
       }
 
 
@@ -1054,9 +540,7 @@ function connectAlpacaStream() {
       ) {
 
 
-        if (
-          message.T !== "t"
-        ) {
+        if (message.T !== "t") {
 
           console.log(
             "ALPACA MESSAGE:",
@@ -1107,7 +591,7 @@ function connectAlpacaStream() {
 
 
         // ------------------------------------------
-        // ERROR
+        // ALPACA ERROR
         // ------------------------------------------
 
         if (
@@ -1125,7 +609,7 @@ function connectAlpacaStream() {
           );
 
 
-          if (
+          const isConnectionLimit =
             Number(
               message.code
             ) === 406 ||
@@ -1136,19 +620,31 @@ function connectAlpacaStream() {
               .toLowerCase()
               .includes(
                 "connection limit"
-              )
-          ) {
+              );
 
-            reconnectEnabled =
-              false;
+
+          if (isConnectionLimit) {
+
+            connectionLimitDetected =
+              true;
 
 
             alpacaStreamStatus =
-              "connection_limit_exceeded";
+              "waiting_for_connection_slot";
 
 
-            console.error(
-              "Alpaca connection limit exceeded. Automatic reconnect disabled."
+            console.log(
+              "Alpaca connection slot is busy."
+            );
+
+
+            console.log(
+              "This may be the previous Render instance shutting down."
+            );
+
+
+            console.log(
+              "Will retry automatically in 15 seconds."
             );
 
 
@@ -1172,15 +668,12 @@ function connectAlpacaStream() {
 
 
         // ------------------------------------------
-        // GOOGL TRADE
+        // LIVE GOOGL TRADE
         // ------------------------------------------
 
         if (
-          message.T ===
-            "t" &&
-
-          message.S ===
-            "GOOGL"
+          message.T === "t" &&
+          message.S === "GOOGL"
         ) {
 
           latestGOOGLTrade = {
@@ -1206,13 +699,15 @@ function connectAlpacaStream() {
           );
 
         }
+
       }
+
     }
   );
 
 
   // ------------------------------------------------
-  // ERROR
+  // SOCKET ERROR
   // ------------------------------------------------
 
   ws.on(
@@ -1224,23 +719,12 @@ function connectAlpacaStream() {
         error.message
       );
 
-
-      if (
-        alpacaStreamStatus !==
-        "connection_limit_exceeded"
-      ) {
-
-        alpacaStreamStatus =
-          "error";
-
-      }
-
     }
   );
 
 
   // ------------------------------------------------
-  // CLOSE
+  // SOCKET CLOSED
   // ------------------------------------------------
 
   ws.on(
@@ -1252,22 +736,15 @@ function connectAlpacaStream() {
       );
 
 
-      if (
-        alpacaWS === ws
-      ) {
-
-        alpacaWS =
-          null;
-
+      if (alpacaWS === ws) {
+        alpacaWS = null;
       }
 
 
-      if (
-        !reconnectEnabled
-      ) {
+      if (connectionLimitDetected) {
 
-        console.log(
-          "Automatic Alpaca reconnect is disabled."
+        scheduleReconnect(
+          CONNECTION_LIMIT_RETRY_DELAY
         );
 
         return;
@@ -1278,11 +755,67 @@ function connectAlpacaStream() {
         "disconnected";
 
 
-      scheduleReconnect();
+      scheduleReconnect(
+        NORMAL_RECONNECT_DELAY
+      );
 
     }
   );
+
 }
+
+
+// ==================================================
+// GRACEFUL SHUTDOWN
+// ==================================================
+
+function shutdown() {
+
+  console.log(
+    "Server shutting down. Closing Alpaca WebSocket."
+  );
+
+
+  if (reconnectTimer) {
+
+    clearTimeout(
+      reconnectTimer
+    );
+
+    reconnectTimer = null;
+
+  }
+
+
+  if (alpacaWS) {
+
+    try {
+
+      alpacaWS.close();
+
+    } catch (_) {}
+
+  }
+
+
+  setTimeout(
+    () => process.exit(0),
+    500
+  );
+
+}
+
+
+process.on(
+  "SIGTERM",
+  shutdown
+);
+
+
+process.on(
+  "SIGINT",
+  shutdown
+);
 
 
 // ==================================================
@@ -1313,7 +846,8 @@ app.get(
       streamStatus:
         alpacaStreamStatus,
 
-      historySeeded,
+      historySeeded:
+        historySeeded,
 
       completedCandleCount:
         completedCandles.length,
@@ -1324,7 +858,8 @@ app.get(
       developing2MinCandle:
         developingCandle,
 
-      completedCandles
+      completedCandles:
+        completedCandles
 
     });
 
@@ -1333,23 +868,7 @@ app.get(
 
 
 // ==================================================
-// OLIVER ENDPOINT
-// ==================================================
-
-app.get(
-  "/googl-oliver",
-  (req, res) => {
-
-    res.json(
-      buildOliverAnalysis()
-    );
-
-  }
-);
-
-
-// ==================================================
-// COMPLETED CANDLE HISTORY ENDPOINT
+// COMPLETED CANDLE HISTORY
 // ==================================================
 
 app.get(
@@ -1364,7 +883,8 @@ app.get(
       timeframe:
         "2Min",
 
-      historySeeded,
+      historySeeded:
+        historySeeded,
 
       count:
         completedCandles.length,
@@ -1403,13 +923,11 @@ app.get(
       streamStatus:
         alpacaStreamStatus,
 
-      historySeeded,
+      historySeeded:
+        historySeeded,
 
       completedCandleCount:
-        completedCandles.length,
-
-      oliverReady:
-        completedCandles.length >= 20
+        completedCandles.length
 
     });
 
@@ -1469,7 +987,6 @@ app.get(
         await fetch(
           url,
           {
-
             headers: {
 
               "APCA-API-KEY-ID":
@@ -1479,7 +996,6 @@ app.get(
                 ALPACA_SECRET_KEY
 
             }
-
           }
         );
 
@@ -1494,9 +1010,7 @@ app.get(
       );
 
 
-      if (
-        !response.ok
-      ) {
+      if (!response.ok) {
 
         return res
           .status(
@@ -1572,7 +1086,6 @@ app.get(
         await fetch(
           url,
           {
-
             headers: {
 
               "APCA-API-KEY-ID":
@@ -1582,7 +1095,6 @@ app.get(
                 ALPACA_SECRET_KEY
 
             }
-
           }
         );
 
@@ -1591,9 +1103,7 @@ app.get(
         await response.json();
 
 
-      if (
-        !response.ok
-      ) {
+      if (!response.ok) {
 
         return res
           .status(
@@ -1631,9 +1141,7 @@ app.get(
             let haOpen;
 
 
-            if (
-              index === 0
-            ) {
+            if (index === 0) {
 
               haOpen =
                 (
@@ -1681,23 +1189,23 @@ app.get(
                 bar.t,
 
               open:
-                round(
-                  haOpen
+                Number(
+                  haOpen.toFixed(4)
                 ),
 
               high:
-                round(
-                  haHigh
+                Number(
+                  haHigh.toFixed(4)
                 ),
 
               low:
-                round(
-                  haLow
+                Number(
+                  haLow.toFixed(4)
                 ),
 
               close:
-                round(
-                  haClose
+                Number(
+                  haClose.toFixed(4)
                 ),
 
               color:
