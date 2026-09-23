@@ -1969,7 +1969,82 @@ app.get(
   }
 );
 
+// ==================================================
+// OLIVER LIVE ANALYSIS ENDPOINT
+// ==================================================
 
+app.get(
+  "/oliver",
+  (req, res) => {
+
+    try {
+
+      // Oliver uses COMPLETED candles only.
+      // The developing candle is deliberately excluded
+      // so an unfinished 2-minute candle cannot create
+      // a false confirmed setup.
+
+      const analysis =
+        analyzeOliver(
+          completedCandles
+        );
+
+
+      res.json({
+
+        symbol:
+          "GOOGL",
+
+        timeframe:
+          "2Min",
+
+        agent:
+          "Oliver",
+
+        engine:
+          "Oliver Engine V1",
+
+        streamStatus:
+          alpacaStreamStatus,
+
+        historySeeded:
+          historySeeded,
+
+        completedCandleCount:
+          completedCandles.length,
+
+        latestTrade:
+          latestGOOGLTrade,
+
+        analysis:
+          analysis
+
+      });
+
+    } catch (error) {
+
+      console.error(
+        "Oliver analysis error:",
+        error
+      );
+
+
+      res
+        .status(500)
+        .json({
+
+          error:
+            "Unable to run Oliver analysis",
+
+          message:
+            error.message
+
+        });
+
+    }
+
+  }
+);
 // ==================================================
 // START SERVER
 // ==================================================
