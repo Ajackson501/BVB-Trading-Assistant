@@ -817,7 +817,721 @@ process.on(
   shutdown
 );
 
+// ==================================================
+// OLIVER ENGINE V1
+// ==================================================
+//
+// Initial live-analysis engine.
+//
+// Uses:
+// - 8 SMA
+// - 20 SMA
+// - price location relative to the averages
+// - SMA alignment
+// - SMA direction
+// - short-term HH/HL and LH/LL structure
+// - takeover candles
+// - pullback -> expansion behavior
+//
+// 200 SMA intentionally remains separate until
+// reliable historical/reference data is supplied.
+//
+// Output is analytical only.
+// ==================================================
 
+
+// --------------------------------------------------
+// SIMPLE MOVING AVERAGE
+// --------------------------------------------------
+
+function calculateSMA(candles, period) {
+
+  if (
+    !Array.isArray(candles) ||
+    candles.length < period
+  ) {
+    return null;
+  }
+
+  const selected =
+    candles.slice(-period);
+
+  const total =
+    selected.reduce(
+      (sum, candle) =>
+        sum + Number(candle.close),
+      0
+    );
+
+  return total / period;
+}
+
+
+// --------------------------------------------------
+// PREVIOUS SMA
+// Used to determine whether an SMA is rising/falling.
+// --------------------------------------------------
+
+function calculatePreviousSMA(
+  candles,
+  period
+) {
+
+  if (
+    !Array.isArray(candles) ||
+    candles.length < period + 1
+  ) {
+    return null;
+  }
+
+  const selected =
+    candles.slice(
+      -(period + 1),
+      -1
+    );
+
+  const total =
+    selected.reduce(
+      (sum, candle) =>
+        sum + Number(candle.close),
+      0
+    );
+
+  return total / period;
+}
+
+
+// --------------------------------------------------
+// CANDLE DIRECTION
+// --------------------------------------------------
+
+function candleDirection(candle) {
+
+  if (!candle) {
+    return "UNKNOWN";
+  }
+
+  if (
+    Number(candle.close) >
+    Number(candle.open)
+  ) {
+    return "GREEN";
+  }
+
+  if (
+    Number(candle.close) <
+    Number(candle.open)
+  ) {
+    return "RED";
+  }
+
+  return "DOJI";
+}
+
+
+// --------------------------------------------------
+// CANDLE BODY SIZE
+// --------------------------------------------------
+
+function candleBody(candle) {
+
+  if (!candle) {
+    return 0;
+  }
+
+  return Math.abs(
+    Number(candle.close) -
+    Number(candle.open)
+  );
+}
+
+
+// --------------------------------------------------
+// BULLISH TAKEOVER
+//
+// Current green candle overtakes the body/range
+// of the previous red candle.
+// --------------------------------------------------
+
+function isBullishTakeover(
+  previous,
+  current
+) {
+
+  if (
+    !previous ||
+    !current
+  ) {
+    return false;
+  }
+
+  const previousDirection =
+    candleDirection(previous);
+
+  const currentDirection =
+    candleDirection(current);
+
+  if (
+    previousDirection !== "RED" ||
+    currentDirection !== "GREEN"
+  ) {
+    return false;
+  }
+
+  return (
+    Number(current.close) >
+      Number(previous.open) &&
+
+    Number(current.high) >=
+      Number(previous.high)
+  );
+}
+
+
+// --------------------------------------------------
+// BEARISH TAKEOVER
+// --------------------------------------------------
+
+function isBearishTakeover(
+  previous,
+  current
+) {
+
+  if (
+    !previous ||
+    !current
+  ) {
+    return false;
+  }
+
+  const previousDirection =
+    candleDirection(previous);
+
+  const currentDirection =
+    candleDirection(current);
+
+  if (
+    previousDirection !== "GREEN" ||
+    currentDirection !== "RED"
+  ) {
+    return false;
+  }
+
+  return (
+    Number(current.close) <
+      Number(previous.open) &&
+
+    Number(current.low) <=
+      Number(previous.low)
+  );
+}
+
+
+// --------------------------------------------------
+// BASIC SHORT-TERM MARKET STRUCTURE
+// --------------------------------------------------
+
+function detectStructure(candles) {
+
+  if (
+    !Array.isArray(candles) ||
+    candles.length < 4
+  ) {
+    return "INSUFFICIENT_DATA";
+  }
+
+  const recent =
+    candles.slice(-4);
+
+  const a = recent[0];
+  const b = recent[1];
+  const c = recent[2];
+  const d = recent[3];
+
+
+  const bullish =
+    Number(c.high) >
+      Number(a.high) &&
+
+    Number(d.low) >
+      Number(b.low);
+
+
+  const bearish =
+    Number(c.low) <
+      Number(a.low) &&
+
+    Number(d.high) <
+      Number(b.high);
+
+
+  if (bullish) {
+    return "HH_HL";
+  }
+
+  if (bearish) {
+    return "LH_LL";
+  }
+
+  return "MIXED";
+}
+
+
+// --------------------------------------------------
+// DETECT EXPANSION CANDLE
+//
+// Looks for a current candle whose body is
+// meaningfully larger than the prior two candles.
+// --------------------------------------------------
+
+function detectExpansion(
+  candles
+) {
+
+  if (
+    !Array.isArray(candles) ||
+    candles.length < 3
+  ) {
+    return null;
+  }
+
+  const previous2 =
+    candles[
+      candles.length - 3
+    ];
+
+  const previous1 =
+    candles[
+      candles.length - 2
+    ];
+
+  const current =
+    candles[
+      candles.length - 1
+    ];
+
+
+  const priorAverage =
+    (
+      candleBody(previous2) +
+      candleBody(previous1)
+    ) / 2;
+
+
+  const currentBody =
+    candleBody(current);
+
+
+  if (
+    priorAverage <= 0
+  ) {
+    return null;
+  }
+
+
+  if (
+    currentBody >=
+    priorAverage * 1.5
+  ) {
+
+    return candleDirection(
+      current
+    );
+
+  }
+
+
+  return null;
+}
+
+
+// --------------------------------------------------
+// OLIVER ANALYSIS
+// --------------------------------------------------
+
+function analyzeOliver(
+  candles
+) {
+
+  if (
+    !Array.isArray(candles) ||
+    candles.length < 21
+  ) {
+
+    return {
+
+      action: "WAIT",
+
+      reason:
+        "Need at least 21 completed candles for Oliver analysis."
+
+    };
+
+  }
+
+
+  const current =
+    candles[
+      candles.length - 1
+    ];
+
+  const previous =
+    candles[
+      candles.length - 2
+    ];
+
+
+  const sma8 =
+    calculateSMA(
+      candles,
+      8
+    );
+
+
+  const sma20 =
+    calculateSMA(
+      candles,
+      20
+    );
+
+
+  const previousSMA8 =
+    calculatePreviousSMA(
+      candles,
+      8
+    );
+
+
+  const previousSMA20 =
+    calculatePreviousSMA(
+      candles,
+      20
+    );
+
+
+  const sma8Direction =
+    sma8 > previousSMA8
+      ? "RISING"
+      : sma8 < previousSMA8
+      ? "FALLING"
+      : "FLAT";
+
+
+  const sma20Direction =
+    sma20 > previousSMA20
+      ? "RISING"
+      : sma20 < previousSMA20
+      ? "FALLING"
+      : "FLAT";
+
+
+  const structure =
+    detectStructure(
+      candles
+    );
+
+
+  const bullishTakeover =
+    isBullishTakeover(
+      previous,
+      current
+    );
+
+
+  const bearishTakeover =
+    isBearishTakeover(
+      previous,
+      current
+    );
+
+
+  const expansion =
+    detectExpansion(
+      candles
+    );
+
+
+  const price =
+    Number(
+      current.close
+    );
+
+
+  // -----------------------------------------------
+  // STATE
+  // -----------------------------------------------
+
+  let state =
+    "MIXED";
+
+
+  if (
+    price > sma8 &&
+    sma8 > sma20 &&
+    sma8Direction === "RISING" &&
+    sma20Direction === "RISING"
+  ) {
+
+    state =
+      "BULLISH";
+
+  }
+
+
+  if (
+    price < sma8 &&
+    sma8 < sma20 &&
+    sma8Direction === "FALLING" &&
+    sma20Direction === "FALLING"
+  ) {
+
+    state =
+      "BEARISH";
+
+  }
+
+
+  // -----------------------------------------------
+  // LOCATION
+  // -----------------------------------------------
+
+  const distanceFrom8 =
+    Math.abs(
+      price - sma8
+    );
+
+
+  const distanceFrom20 =
+    Math.abs(
+      price - sma20
+    );
+
+
+  const nearestSMA =
+    distanceFrom8 <
+    distanceFrom20
+      ? "8_SMA"
+      : "20_SMA";
+
+
+  // -----------------------------------------------
+  // SIGNAL SCORING
+  //
+  // This is NOT a probability.
+  // It simply records how many Oliver conditions
+  // currently agree.
+  // -----------------------------------------------
+
+  let bullishChecks = 0;
+  let bearishChecks = 0;
+
+
+  if (
+    state === "BULLISH"
+  ) {
+    bullishChecks++;
+  }
+
+
+  if (
+    state === "BEARISH"
+  ) {
+    bearishChecks++;
+  }
+
+
+  if (
+    structure === "HH_HL"
+  ) {
+    bullishChecks++;
+  }
+
+
+  if (
+    structure === "LH_LL"
+  ) {
+    bearishChecks++;
+  }
+
+
+  if (
+    bullishTakeover
+  ) {
+    bullishChecks++;
+  }
+
+
+  if (
+    bearishTakeover
+  ) {
+    bearishChecks++;
+  }
+
+
+  if (
+    expansion === "GREEN"
+  ) {
+    bullishChecks++;
+  }
+
+
+  if (
+    expansion === "RED"
+  ) {
+    bearishChecks++;
+  }
+
+
+  // -----------------------------------------------
+  // ACTION
+  // -----------------------------------------------
+
+  let action =
+    "WAIT";
+
+
+  let reason =
+    "No sufficiently aligned Oliver setup.";
+
+
+  if (
+    bullishChecks >= 3 &&
+    bullishChecks >
+      bearishChecks
+  ) {
+
+    action =
+      "CALL_SETUP";
+
+
+    reason =
+      "Bullish Oliver conditions are aligned.";
+
+  }
+
+
+  if (
+    bearishChecks >= 3 &&
+    bearishChecks >
+      bullishChecks
+  ) {
+
+    action =
+      "PUT_SETUP";
+
+
+    reason =
+      "Bearish Oliver conditions are aligned.";
+
+  }
+
+
+  // -----------------------------------------------
+  // TRIGGER / INVALIDATION
+  // -----------------------------------------------
+
+  let trigger =
+    null;
+
+
+  let invalidation =
+    null;
+
+
+  if (
+    action ===
+    "CALL_SETUP"
+  ) {
+
+    trigger =
+      Number(
+        current.high
+      );
+
+
+    invalidation =
+      Number(
+        current.low
+      );
+
+  }
+
+
+  if (
+    action ===
+    "PUT_SETUP"
+  ) {
+
+    trigger =
+      Number(
+        current.low
+      );
+
+
+    invalidation =
+      Number(
+        current.high
+      );
+
+  }
+
+
+  return {
+
+    action,
+
+    reason,
+
+    state,
+
+    price:
+      Number(
+        price.toFixed(4)
+      ),
+
+    sma8:
+      Number(
+        sma8.toFixed(4)
+      ),
+
+    sma20:
+      Number(
+        sma20.toFixed(4)
+      ),
+
+    sma200:
+      null,
+
+    sma200Status:
+      "NOT_CONFIGURED",
+
+    sma8Direction,
+
+    sma20Direction,
+
+    structure,
+
+    nearestSMA,
+
+    bullishTakeover,
+
+    bearishTakeover,
+
+    expansion,
+
+    bullishChecks,
+
+    bearishChecks,
+
+    trigger,
+
+    invalidation,
+
+    analyzedCandle:
+      current.time
+
+  };
+}
 // ==================================================
 // START MARKET DATA SYSTEM
 // ==================================================
