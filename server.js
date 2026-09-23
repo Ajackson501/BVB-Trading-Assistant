@@ -166,8 +166,25 @@ async function seedHistoricalCandles() {
     );
 
 
-    const url =
-      "https://data.alpaca.markets/v2/stocks/GOOGL/bars?timeframe=2Min&limit=300&feed=iex";
+    // Pull several trading days so Oliver has enough
+// completed 2-minute candles for the 200 SMA.
+
+const end = new Date();
+
+const start = new Date();
+start.setUTCDate(start.getUTCDate() - 7);
+
+const params = new URLSearchParams({
+  timeframe: "2Min",
+  start: start.toISOString(),
+  end: end.toISOString(),
+  limit: "1000",
+  feed: "iex",
+  adjustment: "raw"
+});
+
+const url =
+  `https://data.alpaca.markets/v2/stocks/GOOGL/bars?${params.toString()}`;
 
 
     const response =
