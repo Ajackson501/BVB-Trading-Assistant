@@ -1210,7 +1210,18 @@ function analyzeOliver(
       candles,
       20
     );
+  const sma200 =
+  calculateSMA(
+    candles,
+    200
+  );
 
+
+const previousSMA200 =
+  calculatePreviousSMA(
+    candles,
+    200
+  );  
 
   const previousSMA8 =
     calculatePreviousSMA(
@@ -1240,7 +1251,13 @@ function analyzeOliver(
       : sma20 < previousSMA20
       ? "FALLING"
       : "FLAT";
-
+  
+  const sma200Direction =
+  sma200 > previousSMA200
+    ? "RISING"
+    : sma200 < previousSMA200
+    ? "FALLING"
+    : "FLAT";
 
   const structure =
     detectStructure(
@@ -1306,6 +1323,56 @@ function analyzeOliver(
       "BEARISH";
 
   }
+  // -----------------------------------------------
+// 200 SMA CONTEXT
+// -----------------------------------------------
+
+let sma200Context = "UNAVAILABLE";
+
+if (
+  sma200 !== null &&
+  Number.isFinite(sma200)
+) {
+
+  if (price > sma200) {
+    sma200Context = "ABOVE_200";
+  } else if (price < sma200) {
+    sma200Context = "BELOW_200";
+  } else {
+    sma200Context = "AT_200";
+  }
+
+}
+
+let sma200Alignment = "NEUTRAL";
+
+if (
+  state === "BULLISH" &&
+  sma200Context === "ABOVE_200"
+) {
+  sma200Alignment = "ALIGNED";
+}
+
+if (
+  state === "BEARISH" &&
+  sma200Context === "BELOW_200"
+) {
+  sma200Alignment = "ALIGNED";
+}
+
+if (
+  state === "BULLISH" &&
+  sma200Context === "BELOW_200"
+) {
+  sma200Alignment = "COUNTER_TREND";
+}
+
+if (
+  state === "BEARISH" &&
+  sma200Context === "ABOVE_200"
+) {
+  sma200Alignment = "COUNTER_TREND";
+}
 
 
   // -----------------------------------------------
@@ -1397,6 +1464,20 @@ function analyzeOliver(
   ) {
     bearishChecks++;
   }
+  // 200 SMA trend-context confirmation
+if (
+  sma200Alignment === "ALIGNED" &&
+  state === "BULLISH"
+) {
+  bullishChecks++;
+}
+
+if (
+  sma200Alignment === "ALIGNED" &&
+  state === "BEARISH"
+) {
+  bearishChecks++;
+}
 
 
   // -----------------------------------------------
