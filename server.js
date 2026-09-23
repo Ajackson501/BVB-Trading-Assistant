@@ -4,7 +4,7 @@ const WebSocket = require("ws");
 const app = express();
 app.use(express.json());
 
-  const PORT = process.env.PORT || 10000;
+const PORT = process.env.PORT || 10000;
 
 const ALPACA_API_KEY = process.env.ALPACA_API_KEY;
 const ALPACA_SECRET_KEY = process.env.ALPACA_SECRET_KEY;
@@ -21,7 +21,7 @@ let latestGOOGLTrade = null;
 let alpacaStreamStatus = "connecting";
 
 let developingCandle = null;
-  
+
 let completedCandles = [];
 
 const MAX_COMPLETED_CANDLES = 300;
@@ -36,11 +36,8 @@ let historySeeded = false;
 let alpacaWS = null;
 let reconnectTimer = null;
 
-// Normal disconnect retry
 const NORMAL_RECONNECT_DELAY = 5000;
 
-// Longer retry for Alpaca 406.
-// This gives the previous Render instance time to shut down.
 const CONNECTION_LIMIT_RETRY_DELAY = 15000;
 
 
@@ -167,30 +164,46 @@ async function seedHistoricalCandles() {
 
 
     // Pull several trading days so Oliver has enough
-// completed 2-minute candles for the 200 SMA.
+    // completed 2-minute candles for the 200 SMA.
 
-const end = new Date();
+    const end = new Date();
 
-const start = new Date();
-start.setUTCDate(start.getUTCDate() - 7);
+    const start = new Date();
 
-const params = new URLSearchParams({
-  timeframe: "2Min",
-  start: start.toISOString(),
-  end: end.toISOString(),
-  limit: "1000",
-  feed: "iex",
-  adjustment: "raw"
-});
+    start.setUTCDate(
+      start.getUTCDate() - 7
+    );
 
-const url =
-  `https://data.alpaca.markets/v2/stocks/GOOGL/bars?${params.toString()}`;
+
+    const params =
+      new URLSearchParams({
+
+        timeframe: "2Min",
+
+        start:
+          start.toISOString(),
+
+        end:
+          end.toISOString(),
+
+        limit: "1000",
+
+        feed: "iex",
+
+        adjustment: "raw"
+
+      });
+
+
+    const url =
+      `https://data.alpaca.markets/v2/stocks/GOOGL/bars?${params.toString()}`;
 
 
     const response =
       await fetch(
         url,
         {
+
           headers: {
 
             "APCA-API-KEY-ID":
@@ -200,6 +213,7 @@ const url =
               ALPACA_SECRET_KEY
 
           }
+
         }
       );
 
@@ -446,6 +460,7 @@ function connectAlpacaStream() {
 
   // Never intentionally open two sockets
   // inside the same Node process.
+
   if (
     alpacaWS &&
     (
@@ -548,7 +563,9 @@ function connectAlpacaStream() {
 
 
       if (!Array.isArray(messages)) {
+
         messages = [messages];
+
       }
 
 
@@ -754,7 +771,9 @@ function connectAlpacaStream() {
 
 
       if (alpacaWS === ws) {
+
         alpacaWS = null;
+
       }
 
 
@@ -834,15 +853,17 @@ process.on(
   shutdown
 );
 
+
 // ==================================================
 // OLIVER ENGINE V1
 // ==================================================
 //
-// Initial live-analysis engine.
+// Live analysis engine.
 //
 // Uses:
 // - 8 SMA
 // - 20 SMA
+// - 200 SMA trend context
 // - price location relative to the averages
 // - SMA alignment
 // - SMA direction
@@ -850,8 +871,9 @@ process.on(
 // - takeover candles
 // - pullback -> expansion behavior
 //
-// 200 SMA intentionally remains separate until
-// reliable historical/reference data is supplied.
+// The 200 SMA supplies larger-trend context.
+// It adds confirmation when aligned but does not
+// automatically veto an otherwise valid setup.
 //
 // Output is analytical only.
 // ==================================================
@@ -861,32 +883,45 @@ process.on(
 // SIMPLE MOVING AVERAGE
 // --------------------------------------------------
 
-function calculateSMA(candles, period) {
+function calculateSMA(
+  candles,
+  period
+) {
 
   if (
     !Array.isArray(candles) ||
     candles.length < period
   ) {
+
     return null;
+
   }
 
+
   const selected =
-    candles.slice(-period);
+    candles.slice(
+      -period
+    );
+
 
   const total =
     selected.reduce(
       (sum, candle) =>
-        sum + Number(candle.close),
+        sum +
+        Number(
+          candle.close
+        ),
       0
     );
 
+
   return total / period;
+
 }
 
 
 // --------------------------------------------------
 // PREVIOUS SMA
-// Used to determine whether an SMA is rising/falling.
 // --------------------------------------------------
 
 function calculatePreviousSMA(
@@ -896,10 +931,14 @@ function calculatePreviousSMA(
 
   if (
     !Array.isArray(candles) ||
-    candles.length < period + 1
+    candles.length <
+      period + 1
   ) {
+
     return null;
+
   }
+
 
   const selected =
     candles.slice(
@@ -907,14 +946,20 @@ function calculatePreviousSMA(
       -1
     );
 
+
   const total =
     selected.reduce(
       (sum, candle) =>
-        sum + Number(candle.close),
+        sum +
+        Number(
+          candle.close
+        ),
       0
     );
 
+
   return total / period;
+
 }
 
 
@@ -922,27 +967,39 @@ function calculatePreviousSMA(
 // CANDLE DIRECTION
 // --------------------------------------------------
 
-function candleDirection(candle) {
+function candleDirection(
+  candle
+) {
 
   if (!candle) {
+
     return "UNKNOWN";
+
   }
+
 
   if (
     Number(candle.close) >
     Number(candle.open)
   ) {
+
     return "GREEN";
+
   }
+
 
   if (
     Number(candle.close) <
     Number(candle.open)
   ) {
+
     return "RED";
+
   }
 
+
   return "DOJI";
+
 }
 
 
@@ -950,24 +1007,27 @@ function candleDirection(candle) {
 // CANDLE BODY SIZE
 // --------------------------------------------------
 
-function candleBody(candle) {
+function candleBody(
+  candle
+) {
 
   if (!candle) {
+
     return 0;
+
   }
+
 
   return Math.abs(
     Number(candle.close) -
     Number(candle.open)
   );
+
 }
 
 
 // --------------------------------------------------
 // BULLISH TAKEOVER
-//
-// Current green candle overtakes the body/range
-// of the previous red candle.
 // --------------------------------------------------
 
 function isBullishTakeover(
@@ -979,29 +1039,47 @@ function isBullishTakeover(
     !previous ||
     !current
   ) {
+
     return false;
+
   }
+
 
   const previousDirection =
-    candleDirection(previous);
+    candleDirection(
+      previous
+    );
+
 
   const currentDirection =
-    candleDirection(current);
+    candleDirection(
+      current
+    );
+
 
   if (
-    previousDirection !== "RED" ||
-    currentDirection !== "GREEN"
+    previousDirection !==
+      "RED" ||
+
+    currentDirection !==
+      "GREEN"
   ) {
+
     return false;
+
   }
 
+
   return (
+
     Number(current.close) >
       Number(previous.open) &&
 
     Number(current.high) >=
       Number(previous.high)
+
   );
+
 }
 
 
@@ -1018,29 +1096,47 @@ function isBearishTakeover(
     !previous ||
     !current
   ) {
+
     return false;
+
   }
+
 
   const previousDirection =
-    candleDirection(previous);
+    candleDirection(
+      previous
+    );
+
 
   const currentDirection =
-    candleDirection(current);
+    candleDirection(
+      current
+    );
+
 
   if (
-    previousDirection !== "GREEN" ||
-    currentDirection !== "RED"
+    previousDirection !==
+      "GREEN" ||
+
+    currentDirection !==
+      "RED"
   ) {
+
     return false;
+
   }
 
+
   return (
+
     Number(current.close) <
       Number(previous.open) &&
 
     Number(current.low) <=
       Number(previous.low)
+
   );
+
 }
 
 
@@ -1048,17 +1144,23 @@ function isBearishTakeover(
 // BASIC SHORT-TERM MARKET STRUCTURE
 // --------------------------------------------------
 
-function detectStructure(candles) {
+function detectStructure(
+  candles
+) {
 
   if (
     !Array.isArray(candles) ||
     candles.length < 4
   ) {
+
     return "INSUFFICIENT_DATA";
+
   }
+
 
   const recent =
     candles.slice(-4);
+
 
   const a = recent[0];
   const b = recent[1];
@@ -1067,6 +1169,7 @@ function detectStructure(candles) {
 
 
   const bullish =
+
     Number(c.high) >
       Number(a.high) &&
 
@@ -1075,6 +1178,7 @@ function detectStructure(candles) {
 
 
   const bearish =
+
     Number(c.low) <
       Number(a.low) &&
 
@@ -1083,22 +1187,26 @@ function detectStructure(candles) {
 
 
   if (bullish) {
+
     return "HH_HL";
+
   }
+
 
   if (bearish) {
+
     return "LH_LL";
+
   }
 
+
   return "MIXED";
+
 }
 
 
 // --------------------------------------------------
 // DETECT EXPANSION CANDLE
-//
-// Looks for a current candle whose body is
-// meaningfully larger than the prior two candles.
 // --------------------------------------------------
 
 function detectExpansion(
@@ -1109,18 +1217,23 @@ function detectExpansion(
     !Array.isArray(candles) ||
     candles.length < 3
   ) {
+
     return null;
+
   }
+
 
   const previous2 =
     candles[
       candles.length - 3
     ];
 
+
   const previous1 =
     candles[
       candles.length - 2
     ];
+
 
   const current =
     candles[
@@ -1130,19 +1243,28 @@ function detectExpansion(
 
   const priorAverage =
     (
-      candleBody(previous2) +
-      candleBody(previous1)
+      candleBody(
+        previous2
+      ) +
+
+      candleBody(
+        previous1
+      )
     ) / 2;
 
 
   const currentBody =
-    candleBody(current);
+    candleBody(
+      current
+    );
 
 
   if (
     priorAverage <= 0
   ) {
+
     return null;
+
   }
 
 
@@ -1159,6 +1281,7 @@ function detectExpansion(
 
 
   return null;
+
 }
 
 
@@ -1177,10 +1300,26 @@ function analyzeOliver(
 
     return {
 
-      action: "WAIT",
+      action:
+        "WAIT",
 
       reason:
-        "Need at least 21 completed candles for Oliver analysis."
+        "Need at least 21 completed candles for Oliver analysis.",
+
+      sma200:
+        null,
+
+      sma200Status:
+        "INSUFFICIENT_DATA",
+
+      sma200Direction:
+        "UNAVAILABLE",
+
+      sma200Context:
+        "UNAVAILABLE",
+
+      sma200Alignment:
+        "NEUTRAL"
 
     };
 
@@ -1192,11 +1331,16 @@ function analyzeOliver(
       candles.length - 1
     ];
 
+
   const previous =
     candles[
       candles.length - 2
     ];
 
+
+  // ------------------------------------------------
+  // MOVING AVERAGES
+  // ------------------------------------------------
 
   const sma8 =
     calculateSMA(
@@ -1210,18 +1354,14 @@ function analyzeOliver(
       candles,
       20
     );
+
+
   const sma200 =
-  calculateSMA(
-    candles,
-    200
-  );
+    calculateSMA(
+      candles,
+      200
+    );
 
-
-const previousSMA200 =
-  calculatePreviousSMA(
-    candles,
-    200
-  );  
 
   const previousSMA8 =
     calculatePreviousSMA(
@@ -1237,6 +1377,17 @@ const previousSMA200 =
     );
 
 
+  const previousSMA200 =
+    calculatePreviousSMA(
+      candles,
+      200
+    );
+
+
+  // ------------------------------------------------
+  // SMA DIRECTION
+  // ------------------------------------------------
+
   const sma8Direction =
     sma8 > previousSMA8
       ? "RISING"
@@ -1251,13 +1402,36 @@ const previousSMA200 =
       : sma20 < previousSMA20
       ? "FALLING"
       : "FLAT";
-  
-  const sma200Direction =
-  sma200 > previousSMA200
-    ? "RISING"
-    : sma200 < previousSMA200
-    ? "FALLING"
-    : "FLAT";
+
+
+  let sma200Direction =
+    "UNAVAILABLE";
+
+
+  if (
+    sma200 !== null &&
+    previousSMA200 !== null &&
+    Number.isFinite(sma200) &&
+    Number.isFinite(
+      previousSMA200
+    )
+  ) {
+
+    sma200Direction =
+      sma200 >
+        previousSMA200
+        ? "RISING"
+        : sma200 <
+          previousSMA200
+        ? "FALLING"
+        : "FLAT";
+
+  }
+
+
+  // ------------------------------------------------
+  // STRUCTURE / EVENTS
+  // ------------------------------------------------
 
   const structure =
     detectStructure(
@@ -1291,9 +1465,9 @@ const previousSMA200 =
     );
 
 
-  // -----------------------------------------------
+  // ------------------------------------------------
   // STATE
-  // -----------------------------------------------
+  // ------------------------------------------------
 
   let state =
     "MIXED";
@@ -1302,8 +1476,10 @@ const previousSMA200 =
   if (
     price > sma8 &&
     sma8 > sma20 &&
-    sma8Direction === "RISING" &&
-    sma20Direction === "RISING"
+    sma8Direction ===
+      "RISING" &&
+    sma20Direction ===
+      "RISING"
   ) {
 
     state =
@@ -1315,69 +1491,112 @@ const previousSMA200 =
   if (
     price < sma8 &&
     sma8 < sma20 &&
-    sma8Direction === "FALLING" &&
-    sma20Direction === "FALLING"
+    sma8Direction ===
+      "FALLING" &&
+    sma20Direction ===
+      "FALLING"
   ) {
 
     state =
       "BEARISH";
 
   }
-  // -----------------------------------------------
-// 200 SMA CONTEXT
-// -----------------------------------------------
 
-let sma200Context = "UNAVAILABLE";
 
-if (
-  sma200 !== null &&
-  Number.isFinite(sma200)
-) {
+  // ------------------------------------------------
+  // 200 SMA CONTEXT
+  // ------------------------------------------------
 
-  if (price > sma200) {
-    sma200Context = "ABOVE_200";
-  } else if (price < sma200) {
-    sma200Context = "BELOW_200";
-  } else {
-    sma200Context = "AT_200";
+  let sma200Context =
+    "UNAVAILABLE";
+
+
+  if (
+    sma200 !== null &&
+    Number.isFinite(
+      sma200
+    )
+  ) {
+
+    if (
+      price > sma200
+    ) {
+
+      sma200Context =
+        "ABOVE_200";
+
+    } else if (
+      price < sma200
+    ) {
+
+      sma200Context =
+        "BELOW_200";
+
+    } else {
+
+      sma200Context =
+        "AT_200";
+
+    }
+
   }
 
-}
 
-let sma200Alignment = "NEUTRAL";
-
-if (
-  state === "BULLISH" &&
-  sma200Context === "ABOVE_200"
-) {
-  sma200Alignment = "ALIGNED";
-}
-
-if (
-  state === "BEARISH" &&
-  sma200Context === "BELOW_200"
-) {
-  sma200Alignment = "ALIGNED";
-}
-
-if (
-  state === "BULLISH" &&
-  sma200Context === "BELOW_200"
-) {
-  sma200Alignment = "COUNTER_TREND";
-}
-
-if (
-  state === "BEARISH" &&
-  sma200Context === "ABOVE_200"
-) {
-  sma200Alignment = "COUNTER_TREND";
-}
+  let sma200Alignment =
+    "NEUTRAL";
 
 
-  // -----------------------------------------------
+  if (
+    state === "BULLISH" &&
+    sma200Context ===
+      "ABOVE_200"
+  ) {
+
+    sma200Alignment =
+      "ALIGNED";
+
+  }
+
+
+  if (
+    state === "BEARISH" &&
+    sma200Context ===
+      "BELOW_200"
+  ) {
+
+    sma200Alignment =
+      "ALIGNED";
+
+  }
+
+
+  if (
+    state === "BULLISH" &&
+    sma200Context ===
+      "BELOW_200"
+  ) {
+
+    sma200Alignment =
+      "COUNTER_TREND";
+
+  }
+
+
+  if (
+    state === "BEARISH" &&
+    sma200Context ===
+      "ABOVE_200"
+  ) {
+
+    sma200Alignment =
+      "COUNTER_TREND";
+
+  }
+
+
+  // ------------------------------------------------
   // LOCATION
-  // -----------------------------------------------
+  // ------------------------------------------------
 
   const distanceFrom8 =
     Math.abs(
@@ -1398,13 +1617,12 @@ if (
       : "20_SMA";
 
 
-  // -----------------------------------------------
+  // ------------------------------------------------
   // SIGNAL SCORING
   //
   // This is NOT a probability.
-  // It simply records how many Oliver conditions
-  // currently agree.
-  // -----------------------------------------------
+  // It records how many Oliver conditions agree.
+  // ------------------------------------------------
 
   let bullishChecks = 0;
   let bearishChecks = 0;
@@ -1413,76 +1631,104 @@ if (
   if (
     state === "BULLISH"
   ) {
+
     bullishChecks++;
+
   }
 
 
   if (
     state === "BEARISH"
   ) {
+
     bearishChecks++;
+
   }
 
 
   if (
     structure === "HH_HL"
   ) {
+
     bullishChecks++;
+
   }
 
 
   if (
     structure === "LH_LL"
   ) {
+
     bearishChecks++;
+
   }
 
 
   if (
     bullishTakeover
   ) {
+
     bullishChecks++;
+
   }
 
 
   if (
     bearishTakeover
   ) {
+
     bearishChecks++;
+
   }
 
 
   if (
     expansion === "GREEN"
   ) {
+
     bullishChecks++;
+
   }
 
 
   if (
     expansion === "RED"
   ) {
+
     bearishChecks++;
+
   }
-  // 200 SMA trend-context confirmation
-if (
-  sma200Alignment === "ALIGNED" &&
-  state === "BULLISH"
-) {
-  bullishChecks++;
-}
-
-if (
-  sma200Alignment === "ALIGNED" &&
-  state === "BEARISH"
-) {
-  bearishChecks++;
-}
 
 
-  // -----------------------------------------------
+  // 200 SMA provides an additional confirmation
+  // when the immediate state agrees with the
+  // larger trend context.
+
+  if (
+    sma200Alignment ===
+      "ALIGNED" &&
+    state === "BULLISH"
+  ) {
+
+    bullishChecks++;
+
+  }
+
+
+  if (
+    sma200Alignment ===
+      "ALIGNED" &&
+    state === "BEARISH"
+  ) {
+
+    bearishChecks++;
+
+  }
+
+
+  // ------------------------------------------------
   // ACTION
-  // -----------------------------------------------
+  // ------------------------------------------------
 
   let action =
     "WAIT";
@@ -1524,9 +1770,9 @@ if (
   }
 
 
-  // -----------------------------------------------
+  // ------------------------------------------------
   // TRIGGER / INVALIDATION
-  // -----------------------------------------------
+  // ------------------------------------------------
 
   let trigger =
     null;
@@ -1538,7 +1784,7 @@ if (
 
   if (
     action ===
-    "CALL_SETUP"
+      "CALL_SETUP"
   ) {
 
     trigger =
@@ -1557,7 +1803,7 @@ if (
 
   if (
     action ===
-    "PUT_SETUP"
+      "PUT_SETUP"
   ) {
 
     trigger =
@@ -1573,6 +1819,23 @@ if (
 
   }
 
+
+  // ------------------------------------------------
+  // 200 SMA STATUS
+  // ------------------------------------------------
+
+  const sma200Status =
+    sma200 !== null &&
+    Number.isFinite(
+      sma200
+    )
+      ? "ACTIVE"
+      : "INSUFFICIENT_DATA";
+
+
+  // ------------------------------------------------
+  // RESULT
+  // ------------------------------------------------
 
   return {
 
@@ -1598,14 +1861,26 @@ if (
       ),
 
     sma200:
-      null,
+      sma200 !== null &&
+      Number.isFinite(
+        sma200
+      )
+        ? Number(
+            sma200.toFixed(4)
+          )
+        : null,
 
-    sma200Status:
-      "NOT_CONFIGURED",
+    sma200Status,
 
     sma8Direction,
 
     sma20Direction,
+
+    sma200Direction,
+
+    sma200Context,
+
+    sma200Alignment,
 
     structure,
 
@@ -1629,7 +1904,10 @@ if (
       current.time
 
   };
+
 }
+
+
 // ==================================================
 // START MARKET DATA SYSTEM
 // ==================================================
@@ -1756,8 +2034,10 @@ app.get(
   (req, res) => {
 
     res.json({
+
       status:
         "healthy"
+
     });
 
   }
@@ -1799,6 +2079,7 @@ app.get(
         await fetch(
           url,
           {
+
             headers: {
 
               "APCA-API-KEY-ID":
@@ -1808,6 +2089,7 @@ app.get(
                 ALPACA_SECRET_KEY
 
             }
+
           }
         );
 
@@ -1898,6 +2180,7 @@ app.get(
         await fetch(
           url,
           {
+
             headers: {
 
               "APCA-API-KEY-ID":
@@ -1907,6 +2190,7 @@ app.get(
                 ALPACA_SECRET_KEY
 
             }
+
           }
         );
 
@@ -1953,7 +2237,9 @@ app.get(
             let haOpen;
 
 
-            if (index === 0) {
+            if (
+              index === 0
+            ) {
 
               haOpen =
                 (
@@ -2067,6 +2353,7 @@ app.get(
   }
 );
 
+
 // ==================================================
 // OLIVER LIVE ANALYSIS ENDPOINT
 // ==================================================
@@ -2119,6 +2406,7 @@ app.get(
 
       });
 
+
     } catch (error) {
 
       console.error(
@@ -2143,6 +2431,8 @@ app.get(
 
   }
 );
+
+
 // ==================================================
 // OLIVER LIVE DASHBOARD
 // ==================================================
@@ -2156,72 +2446,109 @@ app.get(
         completedCandles
       );
 
+
     const action =
-      analysis.action || "WAIT";
+      analysis.action ||
+      "WAIT";
+
 
     let actionClass =
       "wait";
 
+
     let actionText =
       "WAIT";
 
+
     if (
-      action === "CALL_SETUP"
+      action ===
+        "CALL_SETUP"
     ) {
+
       actionClass =
         "call";
 
       actionText =
         "CALL SETUP";
+
     }
 
+
     if (
-      action === "PUT_SETUP"
+      action ===
+        "PUT_SETUP"
     ) {
+
       actionClass =
         "put";
 
       actionText =
         "PUT SETUP";
+
     }
 
 
-    const arrow = (direction) => {
+    const arrow =
+      (direction) => {
 
-      if (
-        direction === "RISING"
-      ) {
-        return "↑";
-      }
+        if (
+          direction ===
+            "RISING"
+        ) {
 
-      if (
-        direction === "FALLING"
-      ) {
-        return "↓";
-      }
+          return "↑";
 
-      return "→";
-    };
+        }
 
 
-    const money = (value) => {
+        if (
+          direction ===
+            "FALLING"
+        ) {
 
-      if (
-        value === null ||
-        value === undefined ||
-        !Number.isFinite(
+          return "↓";
+
+        }
+
+
+        if (
+          direction ===
+            "FLAT"
+        ) {
+
+          return "→";
+
+        }
+
+
+        return "";
+
+      };
+
+
+    const money =
+      (value) => {
+
+        if (
+          value === null ||
+          value === undefined ||
+          !Number.isFinite(
+            Number(value)
+          )
+        ) {
+
+          return "—";
+
+        }
+
+
+        return (
+          "$" +
           Number(value)
-        )
-      ) {
-        return "—";
-      }
+            .toFixed(2)
+        );
 
-      return (
-        "$" +
-        Number(value)
-          .toFixed(2)
-      );
-    };
+      };
 
 
     const html = `
@@ -2460,6 +2787,8 @@ body {
 
   font-weight: 800;
 
+  text-align: right;
+
 }
 
 .footer {
@@ -2572,6 +2901,35 @@ body {
 <div class="card">
 
   <div class="label">
+    200 SMA
+  </div>
+
+  <div class="value">
+    ${money(analysis.sma200)}
+    ${arrow(
+      analysis.sma200Direction
+    )}
+  </div>
+
+</div>
+
+
+<div class="card">
+
+  <div class="label">
+    200 SMA Context
+  </div>
+
+  <div class="value">
+    ${analysis.sma200Context || "—"}
+  </div>
+
+</div>
+
+
+<div class="card">
+
+  <div class="label">
     Market State
   </div>
 
@@ -2660,7 +3018,9 @@ body {
   </div>
 
   <div class="tradeValue">
-    ${money(analysis.trigger)}
+    ${money(
+      analysis.trigger
+    )}
   </div>
 
 </div>
@@ -2722,7 +3082,47 @@ body {
   </div>
 
   <div class="tradeValue">
-    NOT CONFIGURED
+
+    ${money(
+      analysis.sma200
+    )}
+
+    ${arrow(
+      analysis.sma200Direction
+    )}
+
+  </div>
+
+</div>
+
+
+<div class="tradeRow">
+
+  <div class="tradeLabel">
+    200 Alignment
+  </div>
+
+  <div class="tradeValue">
+    ${
+      analysis.sma200Alignment ||
+      "NEUTRAL"
+    }
+  </div>
+
+</div>
+
+
+<div class="tradeRow">
+
+  <div class="tradeLabel">
+    200 Status
+  </div>
+
+  <div class="tradeValue">
+    ${
+      analysis.sma200Status ||
+      "INSUFFICIENT_DATA"
+    }
   </div>
 
 </div>
@@ -2734,9 +3134,11 @@ body {
 <div class="footer">
 
   2-minute GOOGL candles •
+
   ${
     completedCandles.length
   } completed candles •
+
   ${
     alpacaStreamStatus
   }
@@ -2744,6 +3146,7 @@ body {
   <br><br>
 
   Last analyzed candle:
+
   ${
     analysis.analyzedCandle ||
     "waiting"
@@ -2761,7 +3164,9 @@ body {
 
 setTimeout(
   () => {
+
     window.location.reload();
+
   },
   10000
 );
@@ -2781,6 +3186,7 @@ setTimeout(
 
   }
 );
+
 
 // ==================================================
 // START SERVER
