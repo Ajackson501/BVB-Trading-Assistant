@@ -2071,6 +2071,158 @@ function analyzeOliver(candles) {
 // ==================================================
 
 
+// ==================================================
+// MARKET SESSION AWARENESS
+// ==================================================
+//
+// Uses America/New_York because U.S. equity
+// regular market hours are 9:30 AM - 4:00 PM ET.
+//
+// This is display/signal context.
+// It does NOT change the underlying candle data.
+// ==================================================
+
+function getMarketSession(dateInput = new Date()) {
+
+  const date =
+    dateInput instanceof Date
+      ? dateInput
+      : new Date(dateInput);
+
+  if (
+    Number.isNaN(
+      date.getTime()
+    )
+  ) {
+
+    return {
+      session: "UNKNOWN",
+      regularHours: false
+    };
+
+  }
+
+
+  const parts =
+    new Intl.DateTimeFormat(
+      "en-US",
+      {
+        timeZone:
+          "America/New_York",
+
+        weekday:
+          "short",
+
+        hour:
+          "2-digit",
+
+        minute:
+          "2-digit",
+
+        hour12:
+          false
+      }
+    )
+      .formatToParts(date);
+
+
+  const getPart =
+    (type) =>
+      parts.find(
+        (part) =>
+          part.type === type
+      )?.value;
+
+
+  const weekday =
+    getPart("weekday");
+
+  const hour =
+    Number(
+      getPart("hour")
+    );
+
+  const minute =
+    Number(
+      getPart("minute")
+    );
+
+
+  const minutes =
+    hour * 60 +
+    minute;
+
+
+  const isWeekend =
+    weekday === "Sat" ||
+    weekday === "Sun";
+
+
+  if (isWeekend) {
+
+    return {
+      session: "CLOSED",
+      regularHours: false
+    };
+
+  }
+
+
+  // Premarket:
+  // 4:00 AM - 9:29 AM ET
+
+  if (
+    minutes >= 240 &&
+    minutes < 570
+  ) {
+
+    return {
+      session: "PREMARKET",
+      regularHours: false
+    };
+
+  }
+
+
+  // Regular:
+  // 9:30 AM - 3:59 PM ET
+
+  if (
+    minutes >= 570 &&
+    minutes < 960
+  ) {
+
+    return {
+      session: "REGULAR",
+      regularHours: true
+    };
+
+  }
+
+
+  // After hours:
+  // 4:00 PM - 8:00 PM ET
+
+  if (
+    minutes >= 960 &&
+    minutes < 1200
+  ) {
+
+    return {
+      session: "AFTER_HOURS",
+      regularHours: false
+    };
+
+  }
+
+
+  return {
+    session: "CLOSED",
+    regularHours: false
+  };
+
+}
+
 // --------------------------------------------------
 // BUILD HEIKIN-ASHI FROM COMPLETED REAL CANDLES
 // --------------------------------------------------
@@ -2451,7 +2603,10 @@ function analyzeTrendBattle(
     Number(
       current.close
     );
-
+const marketSession =
+  getMarketSession(
+    current.time
+  );
 
   const haCandles =
     buildHeikinAshi(
@@ -3454,6 +3609,16 @@ function analyzeTrendBattle(
     phase,
 
     action,
+    entryMarker: {
+  bull: 35,
+  bear: -35,
+  crossed:
+    score >= 35
+      ? "BULL_ENTRY"
+      : score <= -35
+        ? "BEAR_ENTRY"
+        : "NONE"
+},
 
     price:
       Number(
