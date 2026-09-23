@@ -4,7 +4,7 @@ const WebSocket = require("ws");
 const app = express();
 app.use(express.json());
 
-const PORT = process.env.PORT || 10000;
+  const PORT = process.env.PORT || 10000;
 
 const ALPACA_API_KEY = process.env.ALPACA_API_KEY;
 const ALPACA_SECRET_KEY = process.env.ALPACA_SECRET_KEY;
@@ -21,7 +21,7 @@ let latestGOOGLTrade = null;
 let alpacaStreamStatus = "connecting";
 
 let developingCandle = null;
-
+  
 let completedCandles = [];
 
 const MAX_COMPLETED_CANDLES = 200;
@@ -2045,6 +2045,645 @@ app.get(
 
   }
 );
+// ==================================================
+// OLIVER LIVE DASHBOARD
+// ==================================================
+
+app.get(
+  "/oliver-dashboard",
+  (req, res) => {
+
+    const analysis =
+      analyzeOliver(
+        completedCandles
+      );
+
+    const action =
+      analysis.action || "WAIT";
+
+    let actionClass =
+      "wait";
+
+    let actionText =
+      "WAIT";
+
+    if (
+      action === "CALL_SETUP"
+    ) {
+      actionClass =
+        "call";
+
+      actionText =
+        "CALL SETUP";
+    }
+
+    if (
+      action === "PUT_SETUP"
+    ) {
+      actionClass =
+        "put";
+
+      actionText =
+        "PUT SETUP";
+    }
+
+
+    const arrow = (direction) => {
+
+      if (
+        direction === "RISING"
+      ) {
+        return "↑";
+      }
+
+      if (
+        direction === "FALLING"
+      ) {
+        return "↓";
+      }
+
+      return "→";
+    };
+
+
+    const money = (value) => {
+
+      if (
+        value === null ||
+        value === undefined ||
+        !Number.isFinite(
+          Number(value)
+        )
+      ) {
+        return "—";
+      }
+
+      return (
+        "$" +
+        Number(value)
+          .toFixed(2)
+      );
+    };
+
+
+    const html = `
+<!DOCTYPE html>
+
+<html>
+
+<head>
+
+<meta
+  name="viewport"
+  content="width=device-width, initial-scale=1.0"
+/>
+
+<title>
+Agent Oliver — GOOGL
+</title>
+
+<style>
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+
+  margin: 0;
+
+  padding: 24px;
+
+  background: #0b0e13;
+
+  color: #ffffff;
+
+  font-family:
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+
+}
+
+.container {
+
+  max-width: 760px;
+
+  margin: 0 auto;
+
+}
+
+.header {
+
+  margin-bottom: 22px;
+
+}
+
+.agent {
+
+  font-size: 14px;
+
+  letter-spacing: 2px;
+
+  color: #8d98a8;
+
+}
+
+.symbol {
+
+  font-size: 36px;
+
+  font-weight: 800;
+
+  margin-top: 5px;
+
+}
+
+.price {
+
+  font-size: 22px;
+
+  color: #c9d1d9;
+
+  margin-top: 4px;
+
+}
+
+.status {
+
+  margin-top: 18px;
+
+  padding: 22px;
+
+  border-radius: 16px;
+
+  text-align: center;
+
+  font-size: 34px;
+
+  font-weight: 900;
+
+}
+
+.status.call {
+
+  background: #123d2b;
+
+  border: 2px solid #2ecc71;
+
+  color: #62e69a;
+
+}
+
+.status.put {
+
+  background: #421d24;
+
+  border: 2px solid #ff5364;
+
+  color: #ff7583;
+
+}
+
+.status.wait {
+
+  background: #2b3038;
+
+  border: 2px solid #7d8795;
+
+  color: #d1d5db;
+
+}
+
+.reason {
+
+  margin-top: 10px;
+
+  text-align: center;
+
+  color: #aeb7c2;
+
+  font-size: 15px;
+
+}
+
+.grid {
+
+  display: grid;
+
+  grid-template-columns:
+    repeat(2, 1fr);
+
+  gap: 14px;
+
+  margin-top: 22px;
+
+}
+
+.card {
+
+  background: #151a22;
+
+  border: 1px solid #252c37;
+
+  border-radius: 14px;
+
+  padding: 18px;
+
+}
+
+.label {
+
+  color: #8792a2;
+
+  font-size: 12px;
+
+  text-transform: uppercase;
+
+  letter-spacing: 1px;
+
+}
+
+.value {
+
+  margin-top: 7px;
+
+  font-size: 22px;
+
+  font-weight: 700;
+
+}
+
+.trade {
+
+  margin-top: 22px;
+
+  background: #151a22;
+
+  border: 1px solid #252c37;
+
+  border-radius: 14px;
+
+  padding: 20px;
+
+}
+
+.tradeRow {
+
+  display: flex;
+
+  justify-content: space-between;
+
+  align-items: center;
+
+  padding: 12px 0;
+
+  border-bottom:
+    1px solid #252c37;
+
+}
+
+.tradeRow:last-child {
+
+  border-bottom: none;
+
+}
+
+.tradeLabel {
+
+  color: #8792a2;
+
+}
+
+.tradeValue {
+
+  font-size: 21px;
+
+  font-weight: 800;
+
+}
+
+.footer {
+
+  margin-top: 20px;
+
+  color: #657080;
+
+  font-size: 12px;
+
+  text-align: center;
+
+}
+
+@media (
+  max-width: 600px
+) {
+
+  body {
+
+    padding: 15px;
+
+  }
+
+  .grid {
+
+    grid-template-columns:
+      1fr;
+
+  }
+
+}
+
+</style>
+
+</head>
+
+
+<body>
+
+<div class="container">
+
+
+<div class="header">
+
+  <div class="agent">
+    AGENT OLIVER — LIVE ANALYSIS
+  </div>
+
+  <div class="symbol">
+    GOOGL
+  </div>
+
+  <div class="price">
+    ${money(analysis.price)}
+  </div>
+
+</div>
+
+
+<div class="status ${actionClass}">
+
+  ${actionText}
+
+</div>
+
+
+<div class="reason">
+
+  ${analysis.reason || ""}
+
+</div>
+
+
+<div class="grid">
+
+
+<div class="card">
+
+  <div class="label">
+    8 SMA
+  </div>
+
+  <div class="value">
+    ${money(analysis.sma8)}
+    ${arrow(
+      analysis.sma8Direction
+    )}
+  </div>
+
+</div>
+
+
+<div class="card">
+
+  <div class="label">
+    20 SMA
+  </div>
+
+  <div class="value">
+    ${money(analysis.sma20)}
+    ${arrow(
+      analysis.sma20Direction
+    )}
+  </div>
+
+</div>
+
+
+<div class="card">
+
+  <div class="label">
+    Market State
+  </div>
+
+  <div class="value">
+    ${analysis.state || "—"}
+  </div>
+
+</div>
+
+
+<div class="card">
+
+  <div class="label">
+    Structure
+  </div>
+
+  <div class="value">
+    ${analysis.structure || "—"}
+  </div>
+
+</div>
+
+
+<div class="card">
+
+  <div class="label">
+    Nearest Average
+  </div>
+
+  <div class="value">
+    ${analysis.nearestSMA || "—"}
+  </div>
+
+</div>
+
+
+<div class="card">
+
+  <div class="label">
+    Expansion
+  </div>
+
+  <div class="value">
+    ${analysis.expansion || "NONE"}
+  </div>
+
+</div>
+
+
+<div class="card">
+
+  <div class="label">
+    Bullish Checks
+  </div>
+
+  <div class="value">
+    ${analysis.bullishChecks ?? 0}
+  </div>
+
+</div>
+
+
+<div class="card">
+
+  <div class="label">
+    Bearish Checks
+  </div>
+
+  <div class="value">
+    ${analysis.bearishChecks ?? 0}
+  </div>
+
+</div>
+
+
+</div>
+
+
+<div class="trade">
+
+
+<div class="tradeRow">
+
+  <div class="tradeLabel">
+    Trigger
+  </div>
+
+  <div class="tradeValue">
+    ${money(analysis.trigger)}
+  </div>
+
+</div>
+
+
+<div class="tradeRow">
+
+  <div class="tradeLabel">
+    Invalidation
+  </div>
+
+  <div class="tradeValue">
+    ${money(
+      analysis.invalidation
+    )}
+  </div>
+
+</div>
+
+
+<div class="tradeRow">
+
+  <div class="tradeLabel">
+    Bullish Takeover
+  </div>
+
+  <div class="tradeValue">
+    ${
+      analysis.bullishTakeover
+        ? "YES"
+        : "NO"
+    }
+  </div>
+
+</div>
+
+
+<div class="tradeRow">
+
+  <div class="tradeLabel">
+    Bearish Takeover
+  </div>
+
+  <div class="tradeValue">
+    ${
+      analysis.bearishTakeover
+        ? "YES"
+        : "NO"
+    }
+  </div>
+
+</div>
+
+
+<div class="tradeRow">
+
+  <div class="tradeLabel">
+    200 SMA
+  </div>
+
+  <div class="tradeValue">
+    NOT CONFIGURED
+  </div>
+
+</div>
+
+
+</div>
+
+
+<div class="footer">
+
+  2-minute GOOGL candles •
+  ${
+    completedCandles.length
+  } completed candles •
+  ${
+    alpacaStreamStatus
+  }
+
+  <br><br>
+
+  Last analyzed candle:
+  ${
+    analysis.analyzedCandle ||
+    "waiting"
+  }
+
+</div>
+
+
+</div>
+
+
+<script>
+
+// Refresh Oliver's analysis every 10 seconds.
+
+setTimeout(
+  () => {
+    window.location.reload();
+  },
+  10000
+);
+
+</script>
+
+
+</body>
+
+</html>
+`;
+
+
+    res
+      .type("html")
+      .send(html);
+
+  }
+);
+
 // ==================================================
 // START SERVER
 // ==================================================
