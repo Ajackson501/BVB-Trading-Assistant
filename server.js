@@ -57,7 +57,8 @@ function connectAlpacaStream() {
     const messages = JSON.parse(data.toString());
 
     for (const message of messages) {
-      if (message.T === "success" && message.msg === "authenticated") {
+    console.log("ALPACA MESSAGE:", JSON.stringify(message));
+        if (message.T === "success" && message.msg === "authenticated") {
         alpacaStreamStatus = "connected";
 
         ws.send(JSON.stringify({
