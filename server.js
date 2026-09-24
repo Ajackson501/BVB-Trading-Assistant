@@ -4815,9 +4815,9 @@ and (max-height: 700px) {
 
 
     <div class="ropeArea">
-    <img src="/Bear.png.PNG" class="tug-character tug-bear" alt="Bear">
+    <img src="/BEARS.PNG" class="tug-character tug-bear" alt="Bear">
 
-    <img src="/Bull.png.PNG" class="tug-character tug-bull" alt="Bull">
+    <img src="/BULLS.PNG" class="tug-character tug-bull" alt="Bull">
     
       <div class="centerLabel">
         NEUTRAL
