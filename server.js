@@ -25,6 +25,11 @@ let developingCandle = null;
 
 let completedCandles = [];
 
+// Trend Event History
+const MAX_TREND_EVENTS = 100;
+let trendEventHistory = [];
+let lastTrendEventKey = null;
+
 const MAX_COMPLETED_CANDLES = 300;
 
 let historySeeded = false;
@@ -134,7 +139,12 @@ function addCompletedCandle(candle) {
       );
 
   }
+// Run Trend Battle analysis whenever a new 2-minute candle completes
+const trendAnalysis = analyzeTrendBattle(completedCandles);
 
+if (trendAnalysis) {
+  recordTrendEvent(trendAnalysis);
+}
 }
 
 
@@ -3692,6 +3702,74 @@ const marketSession =
   };
 
 }
+// ===============================================
+// TREND EVENT RECORDER
+// ===============================================
+
+function recordTrendEvent(analysis) {
+  if (!analysis) return null;
+
+  const control = analysis.control || "NEUTRAL";
+  const action = analysis.action || "WAIT";
+  const price = Number(analysis.price);
+
+  if (!Number.isFinite(price)) return null;
+
+  // A new event is created when the meaningful
+  // trend state/action combination changes.
+  const eventKey = `${control}|${action}`;
+
+  if (eventKey === lastTrendEventKey) {
+    return null;
+  }
+
+  const event = {
+    time: analysis.analyzedCandle || new Date().toISOString(),
+    price,
+    control,
+    pressure: analysis.pressure || "UNKNOWN",
+    ropePosition: analysis.ropePosition ?? 0,
+    phase: analysis.phase || "UNKNOWN",
+    action,
+
+    entryReady: analysis.entryReady ?? false,
+    entryDirection: analysis.entryDirection || "NONE",
+    entryPrice: analysis.entryPrice ?? null,
+    invalidation: analysis.invalidation ?? null,
+    entryEvent: analysis.entryEvent || "NONE",
+
+    haColor: analysis.haColor || "UNKNOWN",
+    haRunColor: analysis.haRunColor || "UNKNOWN",
+    haRunCandles: analysis.haRunCandles ?? 0,
+    haDoji: analysis.haDoji ?? false,
+
+    sma8: analysis.sma8 ?? null,
+    sma20: analysis.sma20 ?? null,
+    sma200: analysis.sma200 ?? null,
+    sma200Context: analysis.sma200Context || "UNAVAILABLE",
+
+    structure: analysis.structure || "UNKNOWN",
+
+    bullEvidence: analysis.bullEvidence || [],
+    bearEvidence: analysis.bearEvidence || []
+  };
+
+  trendEventHistory.push(event);
+
+  if (trendEventHistory.length > MAX_TREND_EVENTS) {
+    trendEventHistory.shift();
+  }
+
+  lastTrendEventKey = eventKey;
+
+  console.log(
+    `TREND EVENT: ${control} | ${action} | GOOGL $${price}`
+  );
+
+  return event;
+}
+
+
 // ==================================================
 // START MARKET DATA SYSTEM
 // ==================================================
