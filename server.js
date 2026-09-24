@@ -4794,9 +4794,9 @@ and (max-height: 700px) {
     <div class="control">
       ${
         battleControl === "BULLS"
-          ? "🐂 BULLS IN CONTROL"
+          ? "BULLS IN CONTROL"
           : battleControl === "BEARS"
-          ? "🐻 BEARS IN CONTROL"
+          ? "BEARS IN CONTROL"
           : "⚖️ BATTLE NEUTRAL"
       }
     </div>
