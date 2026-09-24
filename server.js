@@ -3694,10 +3694,12 @@ const marketSession =
     bearEvidence:
       bearReasons,
 
-    analyzedCandle:
-      current.time
+    marketSession:
+  getMarketSession(new Date()),
 
-  };
+analyzedCandle:
+  current.time
+};
 
 }
 // ===============================================
