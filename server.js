@@ -4339,6 +4339,7 @@ const battle = analyzeTrendBattle(completedCandles);
 
 const ropePosition = Number(battle.ropePosition || 0);
 const ropePercent = Math.max(0, Math.min(100, 50 + ropePosition / 2));
+const tugShift = ropePosition * 0.7;
 
 const battleControl = battle.control || "NEUTRAL";
 const battlePressure = battle.pressure || "WAITING";
@@ -4815,7 +4816,7 @@ and (max-height: 700px) {
     </div>
 
 
-    <div class="ropeArea">
+    <div class="ropeArea" style="transform: translateX(${tugShift}px);">
     <img src="/BEARS.PNG" class="tug-character tug-bear" alt="Bear">
 
     <img src="/BULLS.PNG" class="tug-character tug-bull" alt="Bull">
