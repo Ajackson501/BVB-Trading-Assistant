@@ -2615,9 +2615,7 @@ function analyzeTrendBattle(
       current.close
     );
 const marketSession =
-  getMarketSession(
-    current.time
-  );
+  getMarketSession(new Date());
 
   const haCandles =
     buildHeikinAshi(
