@@ -4743,7 +4743,50 @@ and (max-height: 700px) {
   right: 20px;
   animation: bullPull 1.4s ease-in-out infinite;
 }
+/* Tug-of-war intensity */
 
+.tug-waiting .tug-bear,
+.tug-waiting .tug-bull {
+  animation-duration: 2.4s;
+  opacity: 0.75;
+}
+
+.tug-early .tug-bear,
+.tug-early .tug-bull {
+  animation-duration: 1.8s;
+  opacity: 0.9;
+}
+
+.tug-building .tug-bear,
+.tug-building .tug-bull {
+  animation-duration: 1.1s;
+  opacity: 1;
+}
+
+.tug-confirmed .tug-bear,
+.tug-confirmed .tug-bull {
+  animation-duration: 0.65s;
+  opacity: 1;
+}
+
+/* Rope reacts to battle intensity */
+
+.tug-waiting .rope {
+  opacity: 0.65;
+}
+
+.tug-early .rope {
+  opacity: 0.8;
+}
+
+.tug-building .rope {
+  opacity: 0.95;
+}
+
+.tug-confirmed .rope {
+  opacity: 1;
+  filter: brightness(1.18);
+}
 @keyframes bearPull {
   0%, 100% {
     transform: translateX(0) rotate(0deg);
@@ -4823,7 +4866,7 @@ and (max-height: 700px) {
     </div>
 
 
-    <div class="ropeArea" style="transform: translateX(${tugShift}px);">
+    <div class="ropeArea ${tugIntensity}" style="transform: translateX(${tugShift}px);">
     <img src="/BEARS.PNG" class="tug-character tug-bear" alt="Bear">
 
     <img src="/BULLS.PNG" class="tug-character tug-bull" alt="Bull">
