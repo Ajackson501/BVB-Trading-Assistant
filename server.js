@@ -34,6 +34,13 @@ const MAX_COMPLETED_CANDLES = 300;
 
 let historySeeded = false;
 
+// Persistent trend lock: established control survives ordinary pullbacks.
+let trendLock = {
+  direction: "NEUTRAL",
+  oppositeConfirmations: 0,
+  lastProcessedCandle: null
+};
+
 
 // ==================================================
 // WEBSOCKET STATE
@@ -139,12 +146,13 @@ function addCompletedCandle(candle) {
       );
 
   }
-// Run Trend Battle analysis whenever a new 2-minute candle completes
-const trendAnalysis = analyzeTrendBattle(completedCandles);
 
-if (trendAnalysis) {
-  recordTrendEvent(trendAnalysis);
-}
+  // Run Trend Battle analysis whenever a new 2-minute candle completes
+  const trendAnalysis = analyzeTrendBattle(completedCandles);
+
+  if (trendAnalysis) {
+    recordTrendEvent(trendAnalysis);
+  }
 }
 
 
@@ -211,7 +219,7 @@ async function seedHistoricalCandles() {
 
 
     const response =
-      await fetch(
+            await fetch(
         url,
         {
 
@@ -430,8 +438,8 @@ function scheduleReconnect(
   );
 
 
-  reconnectTimer =
-    setTimeout(
+  reconnectTimer = 
+        setTimeout(
       () => {
 
         reconnectTimer = null;
@@ -459,33 +467,23 @@ function connectAlpacaStream() {
     alpacaStreamStatus =
       "credentials_missing";
 
-
     console.error(
-      "Alpaca credentials are not configured."
+      "Alpaca credentials missing."
     );
-
 
     return;
   }
 
-
-  // Never intentionally open two sockets
-  // inside the same Node process.
 
   if (
     alpacaWS &&
     (
       alpacaWS.readyState ===
         WebSocket.OPEN ||
-
       alpacaWS.readyState ===
         WebSocket.CONNECTING
     )
   ) {
-
-    console.log(
-      "Alpaca WebSocket already active. Skipping duplicate connection."
-    );
 
     return;
   }
@@ -496,61 +494,34 @@ function connectAlpacaStream() {
 
 
   console.log(
-    "Opening Alpaca WebSocket..."
+    "Connecting to Alpaca IEX websocket..."
   );
 
 
-  const ws =
+  alpacaWS =
     new WebSocket(
       "wss://stream.data.alpaca.markets/v2/iex"
     );
 
 
-  alpacaWS = ws;
-
-
-  let connectionLimitDetected =
-    false;
-
-
-  // ------------------------------------------------
-  // SOCKET OPENED
-  // ------------------------------------------------
-
-  ws.on(
+  alpacaWS.on(
     "open",
     () => {
 
+      alpacaStreamStatus =
+        "connected";
+
       console.log(
-        "Alpaca WebSocket connected"
-      );
-
-
-      ws.send(
-        JSON.stringify({
-
-          action: "auth",
-
-          key:
-            ALPACA_API_KEY,
-
-          secret:
-            ALPACA_SECRET_KEY
-
-        })
+        "Connected to Alpaca websocket."
       );
 
     }
   );
 
 
-  // ------------------------------------------------
-  // RECEIVE ALPACA DATA
-  // ------------------------------------------------
-
-  ws.on(
+  alpacaWS.on(
     "message",
-    (data) => {
+    (rawData) => {
 
       let messages;
 
@@ -559,14 +530,14 @@ function connectAlpacaStream() {
 
         messages =
           JSON.parse(
-            data.toString()
+            rawData.toString()
           );
 
       } catch (error) {
 
         console.error(
-          "Unable to parse Alpaca message:",
-          error.message
+          "Unable to parse Alpaca websocket message:",
+          error
         );
 
         return;
@@ -584,128 +555,64 @@ function connectAlpacaStream() {
         const message of messages
       ) {
 
-
-        if (message.T !== "t") {
-
-          console.log(
-            "ALPACA MESSAGE:",
-            JSON.stringify(
-              message
-            )
-          );
-
-        }
-
-
         // ------------------------------------------
-        // AUTHENTICATED
+        // AUTHENTICATION PROMPT
         // ------------------------------------------
 
         if (
           message.T ===
             "success" &&
-
           message.msg ===
-            "authenticated"
+            "connected"
         ) {
 
-          alpacaStreamStatus =
-            "connected";
-
-
-          ws.send(
+          alpacaWS.send(
             JSON.stringify({
 
-              action:
-                "subscribe",
+              action: "auth",
 
-              trades:
-                ["GOOGL"]
+              key:
+                ALPACA_API_KEY,
+
+              secret:
+                ALPACA_SECRET_KEY
 
             })
           );
 
 
-          console.log(
-            "Subscribed to live GOOGL trades"
-          );
-
-
           continue;
         }
 
 
         // ------------------------------------------
-        // ALPACA ERROR
+        // AUTHENTICATION SUCCESS
         // ------------------------------------------
 
         if (
           message.T ===
-            "error"
+            "success" &&
+          message.msg ===
+            "authenticated"
         ) {
 
-          console.error(
-            `Alpaca stream error ${
-              message.code || ""
-            }: ${
-              message.msg ||
-              "unknown error"
-            }`
+          console.log(
+            "Alpaca websocket authenticated."
           );
 
 
-          const isConnectionLimit =
-            Number(
-              message.code
-            ) === 406 ||
+          alpacaWS.send(
+            JSON.stringify({
 
-            String(
-              message.msg || ""
-            )
-              .toLowerCase()
-              .includes(
-                "connection limit"
-              );
+              action:
+                "subscribe",
 
+              trades: [
+                "GOOGL"
+              ]
 
-          if (isConnectionLimit) {
-
-            connectionLimitDetected =
-              true;
-
-
-            alpacaStreamStatus =
-              "waiting_for_connection_slot";
-
-
-            console.log(
-              "Alpaca connection slot is busy."
-            );
-
-
-            console.log(
-              "This may be the previous Render instance shutting down."
-            );
-
-
-            console.log(
-              "Will retry automatically in 15 seconds."
-            );
-
-
-            try {
-
-              ws.close();
-
-            } catch (_) {}
-
-
-            continue;
-          }
-
-
-          alpacaStreamStatus =
-            "error";
+            })
+          );
 
 
           continue;
@@ -713,7 +620,7 @@ function connectAlpacaStream() {
 
 
         // ------------------------------------------
-        // LIVE GOOGL TRADE
+        // LIVE TRADE
         // ------------------------------------------
 
         if (
@@ -721,17 +628,16 @@ function connectAlpacaStream() {
           message.S === "GOOGL"
         ) {
 
-          latestGOOGLTrade = {
+          const trade = {
+
+            symbol:
+              message.S,
 
             price:
-              Number(
-                message.p
-              ),
+              Number(message.p),
 
             size:
-              Number(
-                message.s
-              ) || 0,
+              Number(message.s) || 0,
 
             time:
               message.t
@@ -739,8 +645,82 @@ function connectAlpacaStream() {
           };
 
 
+          latestGOOGLTrade =
+            trade;
+
+
           updateDevelopingCandle(
-            latestGOOGLTrade
+            trade
+          );
+
+
+          continue;
+        }
+
+
+        // ------------------------------------------
+        // CONNECTION LIMIT / ERRORS
+        // ------------------------------------------
+
+        if (
+          message.T === "error"
+        ) {
+
+          console.error(
+            "Alpaca websocket error:",
+            message
+          );
+
+
+          const errorText =
+            String(
+              message.msg || ""
+            ).toLowerCase();
+
+
+          if (
+            message.code === 406 ||
+            errorText.includes(
+              "connection limit"
+            )
+          ) {
+
+            alpacaStreamStatus =
+              "waiting_for_connection_slot";
+
+
+            try {
+
+              alpacaWS.close();
+
+            } catch (_) {}
+
+
+            scheduleReconnect(
+              CONNECTION_LIMIT_RETRY_DELAY
+            );
+
+          } else {
+
+            alpacaStreamStatus =
+              "error";
+
+          }
+
+
+          continue;
+        }
+
+
+        // Useful while diagnosing subscription state.
+        if (
+          message.T !==
+            "subscription"
+        ) {
+
+          console.log(
+            "Alpaca message:",
+            message
           );
 
         }
@@ -751,163 +731,153 @@ function connectAlpacaStream() {
   );
 
 
-  // ------------------------------------------------
-  // SOCKET ERROR
-  // ------------------------------------------------
+  alpacaWS.on(
+    "close",
+    (code, reason) => {
 
-  ws.on(
+      console.log(
+        "Alpaca websocket closed:",
+        code,
+        reason
+          ? reason.toString()
+          : ""
+      );
+
+
+      alpacaWS = null;
+
+
+      if (
+        alpacaStreamStatus !==
+          "waiting_for_connection_slot"
+      ) {
+
+        alpacaStreamStatus =
+          "disconnected";
+
+
+        scheduleReconnect(
+          NORMAL_RECONNECT_DELAY
+        );
+
+      }
+
+    }
+  );
+
+
+  alpacaWS.on(
     "error",
     (error) => {
 
       console.error(
-        "Alpaca WebSocket error:",
+        "Alpaca websocket transport error:",
         error.message
       );
 
     }
   );
 
-
-  // ------------------------------------------------
-  // SOCKET CLOSED
-  // ------------------------------------------------
-
-  ws.on(
-    "close",
-    () => {
-
-      console.log(
-        "Alpaca WebSocket disconnected"
-      );
+}
 
 
-      if (alpacaWS === ws) {
+// ==================================================
+// BASIC CANDLE HELPERS
+// ==================================================
 
-        alpacaWS = null;
+function candleDirection(candle) {
 
-      }
-
-
-      if (connectionLimitDetected) {
-
-        scheduleReconnect(
-          CONNECTION_LIMIT_RETRY_DELAY
-        );
-
-        return;
-      }
+  if (!candle) {
+    return "neutral";
+  }
 
 
-      alpacaStreamStatus =
-        "disconnected";
+  if (
+    candle.close >
+    candle.open
+  ) {
+
+    return "green";
+
+  }
 
 
-      scheduleReconnect(
-        NORMAL_RECONNECT_DELAY
-      );
+  if (
+    candle.close <
+    candle.open
+  ) {
 
-    }
+    return "red";
+
+  }
+
+
+  return "neutral";
+
+}
+
+
+function candleBody(candle) {
+
+  if (!candle) {
+    return 0;
+  }
+
+
+  return Math.abs(
+    Number(candle.close) -
+    Number(candle.open)
   );
 
 }
 
 
 // ==================================================
-// GRACEFUL SHUTDOWN
-// ==================================================
-
-function shutdown() {
-
-  console.log(
-    "Server shutting down. Closing Alpaca WebSocket."
-  );
-
-
-  if (reconnectTimer) {
-
-    clearTimeout(
-      reconnectTimer
-    );
-
-    reconnectTimer = null;
-
-  }
-
-
-  if (alpacaWS) {
-
-    try {
-
-      alpacaWS.close();
-
-    } catch (_) {}
-
-  }
-
-
-  setTimeout(
-    () => process.exit(0),
-    500
-  );
-
-}
-
-
-process.on(
-  "SIGTERM",
-  shutdown
-);
-
-
-process.on(
-  "SIGINT",
-  shutdown
-);
-
-// ==================================================
-// OLIVER ENGINE V1.1
-// ==================================================
-//
-// Adds earlier trend-entry recognition:
-//
-// 1. Takeover near 8/20 SMA
-// 2. Pullback/compression -> expansion
-// 3. Reversal cluster -> directional break
-//
-// Uses COMPLETED 2-minute candles only.
-// ==================================================
-
-
-// --------------------------------------------------
 // SIMPLE MOVING AVERAGE
-// --------------------------------------------------
+// ==================================================
 
-function calculateSMA(candles, period) {
+function calculateSMA(
+  candles,
+  period,
+  endIndex =
+    candles.length - 1
+) {
 
   if (
     !Array.isArray(candles) ||
-    candles.length < period
+    period <= 0 ||
+    endIndex < period - 1
   ) {
+
     return null;
+
   }
 
-  const selected =
-    candles.slice(-period);
 
-  const total =
-    selected.reduce(
-      (sum, candle) =>
-        sum + Number(candle.close),
-      0
-    );
+  let total = 0;
+
+
+  for (
+    let i =
+      endIndex - period + 1;
+    i <= endIndex;
+    i++
+  ) {
+
+    total +=
+      Number(
+        candles[i].close
+      );
+
+  }
+
 
   return total / period;
+
 }
-
-
-// --------------------------------------------------
+// ==================================================
 // PREVIOUS SMA
-// --------------------------------------------------
+// ==================================================
 
 function calculatePreviousSMA(
   candles,
@@ -938,46 +908,9 @@ function calculatePreviousSMA(
 }
 
 
-// --------------------------------------------------
-// CANDLE HELPERS
-// --------------------------------------------------
-
-function candleDirection(candle) {
-
-  if (!candle) {
-    return "UNKNOWN";
-  }
-
-  const open =
-    Number(candle.open);
-
-  const close =
-    Number(candle.close);
-
-  if (close > open) {
-    return "GREEN";
-  }
-
-  if (close < open) {
-    return "RED";
-  }
-
-  return "DOJI";
-}
-
-
-function candleBody(candle) {
-
-  if (!candle) {
-    return 0;
-  }
-
-  return Math.abs(
-    Number(candle.close) -
-    Number(candle.open)
-  );
-}
-
+// ==================================================
+// CANDLE RANGE / AVERAGE BODY
+// ==================================================
 
 function candleRange(candle) {
 
@@ -1013,9 +946,9 @@ function averageBody(candles) {
 }
 
 
-// --------------------------------------------------
+// ==================================================
 // TAKEOVER CANDLES
-// --------------------------------------------------
+// ==================================================
 
 function isBullishTakeover(
   previous,
@@ -1027,8 +960,8 @@ function isBullishTakeover(
   }
 
   if (
-    candleDirection(previous) !== "RED" ||
-    candleDirection(current) !== "GREEN"
+    candleDirection(previous) !== "red" ||
+    candleDirection(current) !== "green"
   ) {
     return false;
   }
@@ -1053,8 +986,8 @@ function isBearishTakeover(
   }
 
   if (
-    candleDirection(previous) !== "GREEN" ||
-    candleDirection(current) !== "RED"
+    candleDirection(previous) !== "green" ||
+    candleDirection(current) !== "red"
   ) {
     return false;
   }
@@ -1069,9 +1002,9 @@ function isBearishTakeover(
 }
 
 
-// --------------------------------------------------
+// ==================================================
 // SHORT-TERM STRUCTURE
-// --------------------------------------------------
+// ==================================================
 
 function detectStructure(candles) {
 
@@ -1114,9 +1047,9 @@ function detectStructure(candles) {
 }
 
 
-// --------------------------------------------------
+// ==================================================
 // EXPANSION CANDLE
-// --------------------------------------------------
+// ==================================================
 
 function detectExpansion(candles) {
 
@@ -1127,128 +1060,37 @@ function detectExpansion(candles) {
     return null;
   }
 
-  const previous2 =
-    candles[candles.length - 3];
-
-  const previous1 =
-    candles[candles.length - 2];
-
   const current =
     candles[candles.length - 1];
 
-  const priorAverage =
-    (
-      candleBody(previous2) +
-      candleBody(previous1)
-    ) / 2;
+  const priorTwo =
+    candles.slice(-3, -1);
 
-  if (priorAverage <= 0) {
+  const baseline =
+    averageBody(priorTwo);
+
+  const currentBody =
+    candleBody(current);
+
+  if (
+    baseline <= 0 ||
+    currentBody <
+      baseline * 1.5
+  ) {
     return null;
   }
 
-  if (
-    candleBody(current) >=
-    priorAverage * 1.5
-  ) {
-    return candleDirection(current);
-  }
-
-  return null;
+  return {
+    direction:
+      candleDirection(current),
+    body: currentBody,
+    baseline
+  };
 }
 
 
 // ==================================================
-// V1.1 PATTERN #1
-// TAKEOVER NEAR 8/20 SMA
-// ==================================================
-
-function detectTakeoverNearSMA(
-  candles,
-  sma8,
-  sma20
-) {
-
-  if (
-    !Array.isArray(candles) ||
-    candles.length < 2 ||
-    !Number.isFinite(sma8) ||
-    !Number.isFinite(sma20)
-  ) {
-    return null;
-  }
-
-  const previous =
-    candles[candles.length - 2];
-
-  const current =
-    candles[candles.length - 1];
-
-  const price =
-    Number(current.close);
-
-  const tolerance =
-    Math.max(
-      price * 0.0025,
-      0.20
-    );
-
-  const near8 =
-    Math.min(
-      Math.abs(Number(current.low) - sma8),
-      Math.abs(Number(current.high) - sma8),
-      Math.abs(price - sma8)
-    ) <= tolerance;
-
-  const near20 =
-    Math.min(
-      Math.abs(Number(current.low) - sma20),
-      Math.abs(Number(current.high) - sma20),
-      Math.abs(price - sma20)
-    ) <= tolerance;
-
-  if (!near8 && !near20) {
-    return null;
-  }
-
-  if (
-    isBullishTakeover(
-      previous,
-      current
-    )
-  ) {
-
-    return {
-      direction: "BULLISH",
-      near:
-        near20
-          ? "20_SMA"
-          : "8_SMA"
-    };
-  }
-
-  if (
-    isBearishTakeover(
-      previous,
-      current
-    )
-  ) {
-
-    return {
-      direction: "BEARISH",
-      near:
-        near20
-          ? "20_SMA"
-          : "8_SMA"
-    };
-  }
-
-  return null;
-}
-
-
-// ==================================================
-// V1.1 PATTERN #2
-// COMPRESSION -> EXPANSION
+// PULLBACK / COMPRESSION -> EXPANSION
 // ==================================================
 
 function detectCompressionExpansion(
@@ -1257,73 +1099,76 @@ function detectCompressionExpansion(
 
   if (
     !Array.isArray(candles) ||
-    candles.length < 6
+    candles.length < 4
   ) {
     return null;
   }
 
+  const recent =
+    candles.slice(-4);
+
+  const first =
+    recent[0];
+
+  const middle1 =
+    recent[1];
+
+  const middle2 =
+    recent[2];
+
   const current =
-    candles[candles.length - 1];
+    recent[3];
 
-  const compression =
-    candles.slice(-3, -1);
+  const firstBody =
+    candleBody(first);
 
-  const baseline =
-    candles.slice(-6, -3);
-
-  const baselineBody =
-    averageBody(baseline);
-
-  const compressionBody =
-    averageBody(compression);
+  const middleAverage =
+    averageBody([
+      middle1,
+      middle2
+    ]);
 
   const currentBody =
     candleBody(current);
 
   if (
-    baselineBody <= 0 ||
-    compressionBody <= 0
+    firstBody <= 0 ||
+    middleAverage <= 0
   ) {
     return null;
   }
 
   const compressed =
-    compressionBody <=
-    baselineBody * 0.75;
+    middleAverage <
+      firstBody * 0.75;
 
-  const expanded =
+  const expanding =
     currentBody >=
-    compressionBody * 1.5;
+      middleAverage * 1.5;
 
   if (
     !compressed ||
-    !expanded
+    !expanding
   ) {
     return null;
   }
 
-  const direction =
-    candleDirection(current);
-
-  if (
-    direction !== "GREEN" &&
-    direction !== "RED"
-  ) {
-    return null;
-  }
-
-  return direction === "GREEN"
-    ? "BULLISH"
-    : "BEARISH";
+  return {
+    direction:
+      candleDirection(current),
+    compressed: true,
+    expansion: true,
+    currentBody,
+    middleAverage
+  };
 }
 
 
 // ==================================================
-// V1.1 PATTERN #3
-// REVERSAL CLUSTER -> BREAK
+// REVERSAL CLUSTER + BREAK
 // ==================================================
 
-function detectReversalBreak(
+function detectReversalCluster(
   candles
 ) {
 
@@ -1334,88 +1179,57 @@ function detectReversalBreak(
     return null;
   }
 
-  const a =
-    candles[candles.length - 5];
+  const recent =
+    candles.slice(-5);
 
-  const b =
-    candles[candles.length - 4];
+  const a = recent[0];
+  const b = recent[1];
+  const c = recent[2];
+  const d = recent[3];
+  const e = recent[4];
 
-  const c =
-    candles[candles.length - 3];
-
-  const d =
-    candles[candles.length - 2];
-
-  const current =
-    candles[candles.length - 1];
-
-
-  // Bullish:
-  // higher low develops,
-  // two green candles,
-  // current candle breaks prior high.
-
-  const bullish =
-    Number(c.low) >
+  const bullishCluster =
+    Number(c.low) >=
       Number(a.low) &&
-
-    candleDirection(d) ===
-      "GREEN" &&
-
-    candleDirection(current) ===
-      "GREEN" &&
-
-    Number(current.high) >
+    Number(d.close) >
+      Number(d.open) &&
+    Number(e.close) >
+      Number(e.open) &&
+    Number(e.high) >
       Number(d.high);
 
-
-  if (bullish) {
-
-    return {
-      direction:
-        "BULLISH",
-
-      breakLevel:
-        Number(d.high)
-    };
-  }
-
-
-  // Bearish:
-  // lower high develops,
-  // two red candles,
-  // current candle breaks prior low.
-
-  const bearish =
-    Number(c.high) <
+  const bearishCluster =
+    Number(c.high) <=
       Number(a.high) &&
-
-    candleDirection(d) ===
-      "RED" &&
-
-    candleDirection(current) ===
-      "RED" &&
-
-    Number(current.low) <
+    Number(d.close) <
+      Number(d.open) &&
+    Number(e.close) <
+      Number(e.open) &&
+    Number(e.low) <
       Number(d.low);
 
-
-  if (bearish) {
+  if (bullishCluster) {
 
     return {
-      direction:
-        "BEARISH",
-
-      breakLevel:
-        Number(d.low)
+      direction: "green",
+      pattern:
+        "HIGHER_LOW_DIRECTIONAL_BREAK"
     };
+
   }
 
+  if (bearishCluster) {
+
+    return {
+      direction: "red",
+      pattern:
+        "LOWER_HIGH_DIRECTIONAL_BREAK"
+    };
+
+  }
 
   return null;
 }
-
-
 // ==================================================
 // OLIVER ANALYSIS V1.1
 // ==================================================
@@ -1492,28 +1306,41 @@ function analyzeOliver(candles) {
 
 
   const directionOf =
-    (currentValue, previousValue) => {
+    (
+      currentValue,
+      previousValue
+    ) => {
 
       if (
-        !Number.isFinite(currentValue) ||
-        !Number.isFinite(previousValue)
+        !Number.isFinite(
+          currentValue
+        ) ||
+        !Number.isFinite(
+          previousValue
+        )
       ) {
+
         return "UNAVAILABLE";
       }
+
 
       if (
         currentValue >
         previousValue
       ) {
+
         return "RISING";
       }
+
 
       if (
         currentValue <
         previousValue
       ) {
+
         return "FALLING";
       }
+
 
       return "FLAT";
     };
@@ -1554,7 +1381,9 @@ function analyzeOliver(candles) {
     sma8Direction === "RISING" &&
     sma20Direction === "RISING"
   ) {
-    state = "BULLISH";
+
+    state =
+      "BULLISH";
   }
 
 
@@ -1564,7 +1393,9 @@ function analyzeOliver(candles) {
     sma8Direction === "FALLING" &&
     sma20Direction === "FALLING"
   ) {
-    state = "BEARISH";
+
+    state =
+      "BEARISH";
   }
 
 
@@ -1580,19 +1411,22 @@ function analyzeOliver(candles) {
     Number.isFinite(sma200)
   ) {
 
-    if (price > sma200) {
+    if (
+      price > sma200
+    ) {
+
       sma200Context =
         "ABOVE_200";
-    }
 
-    else if (
+    } else if (
       price < sma200
     ) {
+
       sma200Context =
         "BELOW_200";
-    }
 
-    else {
+    } else {
+
       sma200Context =
         "AT_200";
     }
@@ -1608,6 +1442,7 @@ function analyzeOliver(candles) {
     sma200Context ===
       "ABOVE_200"
   ) {
+
     sma200Alignment =
       "ALIGNED";
   }
@@ -1618,6 +1453,7 @@ function analyzeOliver(candles) {
     sma200Context ===
       "BELOW_200"
   ) {
+
     sma200Alignment =
       "ALIGNED";
   }
@@ -1628,6 +1464,7 @@ function analyzeOliver(candles) {
     sma200Context ===
       "BELOW_200"
   ) {
+
     sma200Alignment =
       "COUNTER_TREND";
   }
@@ -1638,6 +1475,7 @@ function analyzeOliver(candles) {
     sma200Context ===
       "ABOVE_200"
   ) {
+
     sma200Alignment =
       "COUNTER_TREND";
   }
@@ -1670,16 +1508,8 @@ function analyzeOliver(candles) {
 
 
   // ------------------------------------------------
-  // V1.1 ENTRY PATTERNS
+  // ENTRY PATTERN INFORMATION
   // ------------------------------------------------
-
-  const takeoverNearSMA =
-    detectTakeoverNearSMA(
-      candles,
-      sma8,
-      sma20
-    );
-
 
   const compressionExpansion =
     detectCompressionExpansion(
@@ -1687,8 +1517,8 @@ function analyzeOliver(candles) {
     );
 
 
-  const reversalBreak =
-    detectReversalBreak(
+  const reversalCluster =
+    detectReversalCluster(
       candles
     );
 
@@ -1727,6 +1557,7 @@ function analyzeOliver(candles) {
   if (
     state === "BULLISH"
   ) {
+
     bullishChecks++;
   }
 
@@ -1734,6 +1565,7 @@ function analyzeOliver(candles) {
   if (
     state === "BEARISH"
   ) {
+
     bearishChecks++;
   }
 
@@ -1741,6 +1573,7 @@ function analyzeOliver(candles) {
   if (
     structure === "HH_HL"
   ) {
+
     bullishChecks++;
   }
 
@@ -1748,30 +1581,41 @@ function analyzeOliver(candles) {
   if (
     structure === "LH_LL"
   ) {
-    bearishChecks++;
-  }
 
-
-  if (bullishTakeover) {
-    bullishChecks++;
-  }
-
-
-  if (bearishTakeover) {
     bearishChecks++;
   }
 
 
   if (
-    expansion === "GREEN"
+    bullishTakeover
   ) {
+
     bullishChecks++;
   }
 
 
   if (
-    expansion === "RED"
+    bearishTakeover
   ) {
+
+    bearishChecks++;
+  }
+
+
+  if (
+    expansion?.direction ===
+      "green"
+  ) {
+
+    bullishChecks++;
+  }
+
+
+  if (
+    expansion?.direction ===
+      "red"
+  ) {
+
     bearishChecks++;
   }
 
@@ -1781,6 +1625,7 @@ function analyzeOliver(candles) {
       "ALIGNED" &&
     state === "BULLISH"
   ) {
+
     bullishChecks++;
   }
 
@@ -1790,143 +1635,82 @@ function analyzeOliver(candles) {
       "ALIGNED" &&
     state === "BEARISH"
   ) {
+
     bearishChecks++;
   }
 
 
-  // V1.1 patterns carry additional
-  // confirmation because they are actual
-  // entry-recognition events.
-
   if (
-    takeoverNearSMA?.direction ===
-      "BULLISH"
+    compressionExpansion?.direction ===
+      "green"
   ) {
+
     bullishChecks += 2;
   }
 
 
   if (
-    takeoverNearSMA?.direction ===
-      "BEARISH"
+    compressionExpansion?.direction ===
+      "red"
   ) {
+
     bearishChecks += 2;
   }
 
 
   if (
-    compressionExpansion ===
-      "BULLISH"
+    reversalCluster?.direction ===
+      "green"
   ) {
+
     bullishChecks += 2;
   }
 
 
   if (
-    compressionExpansion ===
-      "BEARISH"
+    reversalCluster?.direction ===
+      "red"
   ) {
+
     bearishChecks += 2;
-  }
-
-
-  if (
-    reversalBreak?.direction ===
-      "BULLISH"
-  ) {
-    bullishChecks += 2;
-  }
-
-
-  if (
-    reversalBreak?.direction ===
-      "BEARISH"
-  ) {
-    bearishChecks += 2;
-  }
-
-
+  } 
   // ------------------------------------------------
-  // ENTRY EVENT
-  // ------------------------------------------------
-
-  let entryEvent =
-    "NONE";
-
-
-  if (
-    takeoverNearSMA
-  ) {
-
-    entryEvent =
-      `${takeoverNearSMA.direction}_TAKEOVER_NEAR_${takeoverNearSMA.near}`;
-  }
-
-
-  if (
-    compressionExpansion
-  ) {
-
-    entryEvent =
-      `${compressionExpansion}_COMPRESSION_EXPANSION`;
-  }
-
-
-  if (
-    reversalBreak
-  ) {
-
-    entryEvent =
-      `${reversalBreak.direction}_REVERSAL_BREAK`;
-  }
-
-
-  // ------------------------------------------------
-  // ACTION
-  //
-  // V1.1 requires an entry event rather than
-  // producing a setup from generic checks alone.
+  // ACTION / ENTRY DECISION
   // ------------------------------------------------
 
   let action =
     "WAIT";
 
-
   let reason =
     "No confirmed Oliver entry event.";
 
+  let entryEvent =
+    "NONE";
+
 
   const bullishEntryEvent =
-    takeoverNearSMA?.direction ===
-      "BULLISH" ||
-
-    compressionExpansion ===
-      "BULLISH" ||
-
-    reversalBreak?.direction ===
-      "BULLISH";
+    bullishTakeover ||
+    compressionExpansion?.direction === "green" ||
+    reversalCluster?.direction === "green";
 
 
   const bearishEntryEvent =
-    takeoverNearSMA?.direction ===
-      "BEARISH" ||
-
-    compressionExpansion ===
-      "BEARISH" ||
-
-    reversalBreak?.direction ===
-      "BEARISH";
+    bearishTakeover ||
+    compressionExpansion?.direction === "red" ||
+    reversalCluster?.direction === "red";
 
 
   if (
     bullishEntryEvent &&
     bullishChecks >= 3 &&
-    bullishChecks >
-      bearishChecks
+    bullishChecks > bearishChecks
   ) {
 
     action =
       "CALL_SETUP";
+
+    entryEvent =
+      "BULLISH";
 
     reason =
       "Bullish Oliver entry event confirmed with supporting conditions.";
@@ -1936,12 +1720,14 @@ function analyzeOliver(candles) {
   if (
     bearishEntryEvent &&
     bearishChecks >= 3 &&
-    bearishChecks >
-      bullishChecks
+    bearishChecks > bullishChecks
   ) {
 
     action =
       "PUT_SETUP";
+
+    entryEvent =
+      "BEARISH";
 
     reason =
       "Bearish Oliver entry event confirmed with supporting conditions.";
@@ -1981,7 +1767,7 @@ function analyzeOliver(candles) {
 
 
   // ------------------------------------------------
-  // RESULT
+  // RETURN OLIVER ANALYSIS
   // ------------------------------------------------
 
   return {
@@ -1990,34 +1776,21 @@ function analyzeOliver(candles) {
 
     reason,
 
+    entryEvent,
+
+    price,
+
     state,
 
-    price:
-      Number(
-        price.toFixed(4)
-      ),
+    structure,
 
-    sma8:
-      Number(
-        sma8.toFixed(4)
-      ),
+    nearestSMA,
 
-    sma20:
-      Number(
-        sma20.toFixed(4)
-      ),
+    sma8,
 
-    sma200:
-      Number.isFinite(sma200)
-        ? Number(
-            sma200.toFixed(4)
-          )
-        : null,
+    sma20,
 
-    sma200Status:
-      Number.isFinite(sma200)
-        ? "LIVE"
-        : "UNAVAILABLE",
+    sma200,
 
     sma8Direction,
 
@@ -2029,416 +1802,340 @@ function analyzeOliver(candles) {
 
     sma200Alignment,
 
-    structure,
+    bullishChecks,
 
-    nearestSMA,
+    bearishChecks,
 
     bullishTakeover,
 
     bearishTakeover,
 
-    expansion,
+    expansion:
+      expansion?.direction ||
+      "NONE",
 
-    takeoverNearSMA,
+    compressionExpansion:
+      compressionExpansion
+        ? compressionExpansion.direction
+        : "NONE",
 
-    compressionExpansion,
-
-    reversalBreak,
-
-    entryEvent,
-
-    bullishChecks,
-
-    bearishChecks,
+    reversalCluster:
+      reversalCluster
+        ? reversalCluster.direction
+        : "NONE",
 
     trigger,
 
     invalidation,
 
-    analyzedCandle:
+    candleTime:
       current.time
 
   };
-}
-
-// ==================================================
-// BVB V2 — TUG-OF-WAR TREND ENGINE
-// ==================================================
-//
-// Purpose:
-// Detect:
-// 1. Who controls the trend — Bulls / Bears / Neutral
-// 2. How strong that control is
-// 3. Whether a trend is early, active, weakening, or extended
-// 4. Heikin-Ashi trend behavior
-// 5. Potential direction-change / exhaustion warnings
-//
-// IMPORTANT:
-// - Uses completed candles only.
-// - HA is used for trend interpretation.
-// - Real OHLC candles remain the source for executable
-//   entry / invalidation prices.
-// - Oliver V1.1 remains intact.
-// ==================================================
-
-
-// ==================================================
-// MARKET SESSION AWARENESS
-// ==================================================
-//
-// Uses America/New_York because U.S. equity
-// regular market hours are 9:30 AM - 4:00 PM ET.
-//
-// This is display/signal context.
-// It does NOT change the underlying candle data.
-// ==================================================
-
-function getMarketSession(dateInput = new Date()) {
-
-  const date =
-    dateInput instanceof Date
-      ? dateInput
-      : new Date(dateInput);
-
-  if (
-    Number.isNaN(
-      date.getTime()
-    )
-  ) {
-
-    return {
-      session: "UNKNOWN",
-      regularHours: false
-    };
-
-  }
-
-
-  const parts =
-    new Intl.DateTimeFormat(
-      "en-US",
-      {
-        timeZone:
-          "America/New_York",
-
-        weekday:
-          "short",
-
-        hour:
-          "2-digit",
-
-        minute:
-          "2-digit",
-
-        hour12:
-          false
-      }
-    )
-      .formatToParts(date);
-
-
-  const getPart =
-    (type) =>
-      parts.find(
-        (part) =>
-          part.type === type
-      )?.value;
-
-
-  const weekday =
-    getPart("weekday");
-
-  const hour =
-    Number(
-      getPart("hour")
-    );
-
-  const minute =
-    Number(
-      getPart("minute")
-    );
-
-
-  const minutes =
-    hour * 60 +
-    minute;
-
-
-  const isWeekend =
-    weekday === "Sat" ||
-    weekday === "Sun";
-
-
-  if (isWeekend) {
-
-    return {
-      session: "CLOSED",
-      regularHours: false
-    };
-
-  }
-
-
-  // Premarket:
-  // 4:00 AM - 9:29 AM ET
-
-  if (
-    minutes >= 240 &&
-    minutes < 570
-  ) {
-
-    return {
-      session: "PREMARKET",
-      regularHours: false
-    };
-
-  }
-
-
-  // Regular:
-  // 9:30 AM - 3:59 PM ET
-
-  if (
-    minutes >= 570 &&
-    minutes < 960
-  ) {
-
-    return {
-      session: "REGULAR",
-      regularHours: true
-    };
-
-  }
-
-
-  // After hours:
-  // 4:00 PM - 8:00 PM ET
-
-  if (
-    minutes >= 960 &&
-    minutes < 1200
-  ) {
-
-    return {
-      session: "AFTER_HOURS",
-      regularHours: false
-    };
-
-  }
-
-
-  return {
-    session: "CLOSED",
-    regularHours: false
-  };
 
 }
 
-// --------------------------------------------------
-// BUILD HEIKIN-ASHI FROM COMPLETED REAL CANDLES
-// --------------------------------------------------
 
-function buildHeikinAshi(candles) {
+// ==================================================
+// HEIKIN-ASHI CONVERSION
+// ==================================================
+
+function buildHeikinAshi(
+  candles
+) {
 
   if (
     !Array.isArray(candles) ||
     candles.length === 0
   ) {
+
     return [];
   }
+
+
+  const result = [];
 
   let previousHAOpen = null;
   let previousHAClose = null;
 
-  return candles.map(
-    (candle, index) => {
 
-      const open =
-        Number(candle.open);
+  for (
+    let i = 0;
+    i < candles.length;
+    i++
+  ) {
 
-      const high =
-        Number(candle.high);
-
-      const low =
-        Number(candle.low);
-
-      const close =
-        Number(candle.close);
+    const candle =
+      candles[i];
 
 
-      const haClose =
+    const open =
+      Number(candle.open);
+
+    const high =
+      Number(candle.high);
+
+    const low =
+      Number(candle.low);
+
+    const close =
+      Number(candle.close);
+
+
+    const haClose =
+      (
+        open +
+        high +
+        low +
+        close
+      ) / 4;
+
+
+    let haOpen;
+
+
+    if (
+      i === 0 ||
+      previousHAOpen === null ||
+      previousHAClose === null
+    ) {
+
+      haOpen =
         (
           open +
-          high +
-          low +
           close
-        ) / 4;
+        ) / 2;
 
+    } else {
 
-      let haOpen;
-
-
-      if (index === 0) {
-
-        haOpen =
-          (
-            open +
-            close
-          ) / 2;
-
-      } else {
-
-        haOpen =
-          (
-            previousHAOpen +
-            previousHAClose
-          ) / 2;
-
-      }
-
-
-      const haHigh =
-        Math.max(
-          high,
-          haOpen,
-          haClose
-        );
-
-
-      const haLow =
-        Math.min(
-          low,
-          haOpen,
-          haClose
-        );
-
-
-      const body =
-        Math.abs(
-          haClose -
-          haOpen
-        );
-
-
-      const range =
-        Math.max(
-          haHigh -
-          haLow,
-          0
-        );
-
-
-      const upperWick =
-        Math.max(
-          haHigh -
-          Math.max(
-            haOpen,
-            haClose
-          ),
-          0
-        );
-
-
-      const lowerWick =
-        Math.max(
-          Math.min(
-            haOpen,
-            haClose
-          ) -
-          haLow,
-          0
-        );
-
-
-      const color =
-        haClose > haOpen
-          ? "GREEN"
-          : haClose < haOpen
-          ? "RED"
-          : "DOJI";
-
-
-      // A relative doji test is better than requiring
-      // the open and close to be exactly equal.
-
-      const isDoji =
-        range > 0 &&
-        body / range <= 0.25;
-
-
-      // "No wick" needs a tolerance because market
-      // prices rarely produce perfect mathematical zero.
-
-      const wickTolerance =
-        Math.max(
-          range * 0.08,
-          0.01
-        );
-
-
-      const noLowerWick =
-        lowerWick <=
-        wickTolerance;
-
-
-      const noUpperWick =
-        upperWick <=
-        wickTolerance;
-
-
-      previousHAOpen =
-        haOpen;
-
-      previousHAClose =
-        haClose;
-
-
-      return {
-
-        time:
-          candle.time,
-
-        open:
-          haOpen,
-
-        high:
-          haHigh,
-
-        low:
-          haLow,
-
-        close:
-          haClose,
-
-        color,
-
-        body,
-
-        range,
-
-        upperWick,
-
-        lowerWick,
-
-        isDoji,
-
-        noLowerWick,
-
-        noUpperWick
-
-      };
-
+      haOpen =
+        (
+          previousHAOpen +
+          previousHAClose
+        ) / 2;
     }
-  );
 
+
+    const haHigh =
+      Math.max(
+        high,
+        haOpen,
+        haClose
+      );
+
+
+    const haLow =
+      Math.min(
+        low,
+        haOpen,
+        haClose
+      );
+
+
+    result.push({
+
+      time:
+        candle.time,
+
+      open:
+        haOpen,
+
+      high:
+        haHigh,
+
+      low:
+        haLow,
+
+      close:
+        haClose
+
+    });
+
+
+    previousHAOpen =
+      haOpen;
+
+    previousHAClose =
+      haClose;
+  }
+
+
+  return result;
 }
 
 
-// --------------------------------------------------
-// CURRENT HA RUN
-// --------------------------------------------------
+// ==================================================
+// HEIKIN-ASHI CANDLE CLASSIFICATION
+// ==================================================
 
-function getHARun(haCandles) {
+function classifyHeikinAshi(
+  candle
+) {
+
+  if (!candle) {
+
+    return {
+      direction: "NEUTRAL",
+      type: "UNKNOWN"
+    };
+  }
+
+
+  const open =
+    Number(candle.open);
+
+  const close =
+    Number(candle.close);
+
+  const high =
+    Number(candle.high);
+
+  const low =
+    Number(candle.low);
+
+
+  const body =
+    Math.abs(
+      close - open
+    );
+
+
+  const range =
+    Math.max(
+      high - low,
+      0.000001
+    );
+
+
+  const upperWick =
+    high -
+    Math.max(
+      open,
+      close
+    );
+
+
+  const lowerWick =
+    Math.min(
+      open,
+      close
+    ) -
+    low;
+
+
+  const bodyRatio =
+    body / range;
+
+
+  // Small body with wicks on both sides:
+  // indecision / possible transition.
+
+  if (
+    bodyRatio <= 0.30 &&
+    upperWick > 0 &&
+    lowerWick > 0
+  ) {
+
+    return {
+
+      direction:
+        close > open
+          ? "GREEN"
+          : close < open
+            ? "RED"
+            : "NEUTRAL",
+
+      type:
+        "INDECISION",
+
+      bodyRatio,
+
+      upperWick,
+
+      lowerWick
+    };
+  }
+
+
+  // Green HA candle with essentially
+  // no lower wick = buyer conviction.
+
+  if (
+    close > open &&
+    lowerWick <=
+      range * 0.05
+  ) {
+
+    return {
+
+      direction:
+        "GREEN",
+
+      type:
+        "BUYERS_STRONG",
+
+      bodyRatio,
+
+      upperWick,
+
+      lowerWick
+    };
+  }
+
+
+  // Red HA candle with essentially
+  // no upper wick = seller conviction.
+
+  if (
+    close < open &&
+    upperWick <=
+      range * 0.05
+  ) {
+
+    return {
+
+      direction:
+        "RED",
+
+      type:
+        "SELLERS_STRONG",
+
+      bodyRatio,
+
+      upperWick,
+
+      lowerWick
+    };
+  }
+
+
+  return {
+
+    direction:
+      close > open
+        ? "GREEN"
+        : close < open
+          ? "RED"
+          : "NEUTRAL",
+
+    type:
+      "STANDARD",
+
+    bodyRatio,
+
+    upperWick,
+
+    lowerWick
+  };
+
+} 
+// ==================================================
+// HEIKIN-ASHI RUN ANALYSIS
+// ==================================================
+
+function analyzeHARun(
+  haCandles
+) {
 
   if (
     !Array.isArray(haCandles) ||
@@ -2446,29 +2143,31 @@ function getHARun(haCandles) {
   ) {
 
     return {
-      color: "NONE",
-      count: 0
+      direction: "NONE",
+      count: 0,
+      strength: "NONE"
     };
-
   }
 
 
   const last =
-    haCandles[
-      haCandles.length - 1
-    ];
+    classifyHeikinAshi(
+      haCandles[
+        haCandles.length - 1
+      ]
+    );
 
 
   if (
-    last.color !== "GREEN" &&
-    last.color !== "RED"
+    last.direction !== "GREEN" &&
+    last.direction !== "RED"
   ) {
 
     return {
-      color: last.color,
-      count: 1
+      direction: "NONE",
+      count: 0,
+      strength: "NONE"
     };
-
   }
 
 
@@ -2478,91 +2177,422 @@ function getHARun(haCandles) {
   for (
     let i =
       haCandles.length - 1;
-
     i >= 0;
-
     i--
   ) {
 
+    const classification =
+      classifyHeikinAshi(
+        haCandles[i]
+      );
+
+
     if (
-      haCandles[i].color !==
-      last.color
+      classification.direction !==
+      last.direction
     ) {
       break;
     }
 
-    count++;
 
+    count++;
+  }
+
+
+  let strength =
+    "EARLY";
+
+
+  if (
+    count >= 3
+  ) {
+
+    strength =
+      "ESTABLISHED";
+  }
+
+
+  if (
+    count >= 5
+  ) {
+
+    strength =
+      "EXTENDED";
   }
 
 
   return {
-    color:
-      last.color,
 
-    count
+    direction:
+      last.direction,
+
+    count,
+
+    strength,
+
+    currentType:
+      last.type
+
   };
 
 }
 
 
-// --------------------------------------------------
-// HA BODY TREND
-// --------------------------------------------------
+// ==================================================
+// TREND LOCK
+// Keeps an established trend alive through ordinary
+// pullbacks instead of flipping on every pressure move.
+// ==================================================
 
-function getHABodyMomentum(
-  haCandles
+function applyTrendLock(
+  rawDirection,
+  strength,
+  candleTime
 ) {
 
-  if (
-    !Array.isArray(haCandles) ||
-    haCandles.length < 3
-  ) {
-    return "UNKNOWN";
+  const normalizedDirection =
+    rawDirection === "BULL"
+      ? "BULL"
+      : rawDirection === "BEAR"
+        ? "BEAR"
+        : "NEUTRAL";
+
+
+  // Only update confirmation counters once
+  // per completed 2-minute candle.
+
+  const isNewCandle =
+    candleTime &&
+    candleTime !==
+      trendLock.lastProcessedCandle;
+
+
+  if (isNewCandle) {
+
+    trendLock.lastProcessedCandle =
+      candleTime;
   }
 
 
-  const a =
-    haCandles[
-      haCandles.length - 3
-    ].body;
-
-
-  const b =
-    haCandles[
-      haCandles.length - 2
-    ].body;
-
-
-  const c =
-    haCandles[
-      haCandles.length - 1
-    ].body;
-
+  // No established trend yet.
+  // Require meaningful directional evidence
+  // before creating the first lock.
 
   if (
-    c > b &&
-    b >= a
+    trendLock.direction ===
+      "NEUTRAL"
   ) {
-    return "EXPANDING";
+
+    if (
+      normalizedDirection === "BULL" &&
+      (
+        strength === "STRONG" ||
+        strength === "DOMINANT"
+      )
+    ) {
+
+      trendLock.direction =
+        "BULL";
+
+      trendLock.oppositeConfirmations =
+        0;
+
+    } else if (
+      normalizedDirection === "BEAR" &&
+      (
+        strength === "STRONG" ||
+        strength === "DOMINANT"
+      )
+    ) {
+
+      trendLock.direction =
+        "BEAR";
+
+      trendLock.oppositeConfirmations =
+        0;
+    }
+
+
+    return {
+
+      establishedTrend:
+        trendLock.direction,
+
+      management:
+        trendLock.direction ===
+          "BULL"
+          ? "HOLD_CALL_TREND"
+          : trendLock.direction ===
+              "BEAR"
+            ? "HOLD_PUT_TREND"
+            : "WAIT",
+
+      reversalWatch:
+        false,
+
+      oppositeConfirmations:
+        trendLock.oppositeConfirmations
+
+    };
   }
 
 
+  // ----------------------------------------------
+  // EXISTING BULL TREND
+  // ----------------------------------------------
+
   if (
-    c < b &&
-    b <= a
+    trendLock.direction === "BULL"
   ) {
-    return "SHRINKING";
+
+    if (
+      normalizedDirection === "BULL"
+    ) {
+
+      if (isNewCandle) {
+
+        trendLock.oppositeConfirmations =
+          0;
+      }
+
+
+      return {
+
+        establishedTrend:
+          "BULL",
+
+        management:
+          "HOLD_CALL_TREND",
+
+        reversalWatch:
+          false,
+
+        oppositeConfirmations:
+          trendLock.oppositeConfirmations
+
+      };
+    }
+
+
+    if (
+      normalizedDirection === "BEAR"
+    ) {
+
+      if (
+        isNewCandle &&
+        (
+          strength === "STRONG" ||
+          strength === "DOMINANT"
+        )
+      ) {
+
+        trendLock.oppositeConfirmations++;
+      }
+
+
+      if (
+        trendLock.oppositeConfirmations >= 2
+      ) {
+
+        trendLock.direction =
+          "BEAR";
+
+        trendLock.oppositeConfirmations =
+          0;
+
+
+        return {
+
+          establishedTrend:
+            "BEAR",
+
+          management:
+            "REVERSAL_CONFIRMED_TO_PUT",
+
+          reversalWatch:
+            false,
+
+          oppositeConfirmations:
+            0
+
+        };
+      }
+
+
+      return {
+
+        establishedTrend:
+          "BULL",
+
+        management:
+          "HOLD_CALL_REVERSAL_WATCH",
+
+        reversalWatch:
+          true,
+
+        oppositeConfirmations:
+          trendLock.oppositeConfirmations
+
+      };
+    }
+
+
+    return {
+
+      establishedTrend:
+        "BULL",
+
+      management:
+        "HOLD_CALL_PULLBACK",
+
+      reversalWatch:
+        false,
+
+      oppositeConfirmations:
+        trendLock.oppositeConfirmations
+
+    };
   }
 
 
-  return "MIXED";
+  // ----------------------------------------------
+  // EXISTING BEAR TREND
+  // ----------------------------------------------
+
+  if (
+    trendLock.direction === "BEAR"
+  ) {
+
+    if (
+      normalizedDirection === "BEAR"
+    ) {
+
+      if (isNewCandle) {
+
+        trendLock.oppositeConfirmations =
+          0;
+      }
+
+
+      return {
+
+        establishedTrend:
+          "BEAR",
+
+        management:
+          "HOLD_PUT_TREND",
+
+        reversalWatch:
+          false,
+
+        oppositeConfirmations:
+          trendLock.oppositeConfirmations
+
+      };
+    }
+
+
+    if (
+      normalizedDirection === "BULL"
+    ) {
+
+      if (
+        isNewCandle &&
+        (
+          strength === "STRONG" ||
+          strength === "DOMINANT"
+        )
+      ) {
+
+        trendLock.oppositeConfirmations++;
+      }
+
+
+      if (
+        trendLock.oppositeConfirmations >= 2
+      ) {
+
+        trendLock.direction =
+          "BULL";
+
+        trendLock.oppositeConfirmations =
+          0;
+
+
+        return {
+
+          establishedTrend:
+            "BULL",
+
+          management:
+            "REVERSAL_CONFIRMED_TO_CALL",
+
+          reversalWatch:
+            false,
+
+          oppositeConfirmations:
+            0
+
+        };
+      }
+
+
+      return {
+
+        establishedTrend:
+          "BEAR",
+
+        management:
+          "HOLD_PUT_REVERSAL_WATCH",
+
+        reversalWatch:
+          true,
+
+        oppositeConfirmations:
+          trendLock.oppositeConfirmations
+
+      };
+    }
+
+
+    return {
+
+      establishedTrend:
+        "BEAR",
+
+      management:
+        "HOLD_PUT_PULLBACK",
+
+      reversalWatch:
+        false,
+
+      oppositeConfirmations:
+        trendLock.oppositeConfirmations
+
+    };
+  }
+
+
+  return {
+
+    establishedTrend:
+      "NEUTRAL",
+
+    management:
+      "WAIT",
+
+    reversalWatch:
+      false,
+
+    oppositeConfirmations:
+      0
+
+  };
+
 }
-
-
-// --------------------------------------------------
-// TREND BATTLE ANALYSIS
-// --------------------------------------------------
+// ==================================================
+// TREND BATTLE ENGINE
+// ==================================================
 
 function analyzeTrendBattle(
   candles
@@ -2575,33 +2605,26 @@ function analyzeTrendBattle(
 
     return {
 
-      control:
+      battleState:
+        "INSUFFICIENT_DATA",
+
+      pressureDirection:
         "NEUTRAL",
 
-      pressure:
-        "WAITING",
+      strength:
+        "NONE",
 
-      ropePosition:
-        0,
+      establishedTrend:
+        trendLock.direction,
 
-      phase:
+      management:
         "WAIT",
 
-      action:
-        "WAIT",
-
-      reason:
-        "Need at least 21 completed candles."
+      reversalWatch:
+        false
 
     };
-
   }
-
-
-  // Oliver remains one of the underlying engines.
-
-  const oliver =
-    analyzeOliver(candles);
 
 
   const current =
@@ -2610,14 +2633,11 @@ function analyzeTrendBattle(
     ];
 
 
-  const price =
-    Number(
-      current.close
+  const oliver =
+    analyzeOliver(
+      candles
     );
-const marketSession =
-  getMarketSession(
-    current.time
-  );
+
 
   const haCandles =
     buildHeikinAshi(
@@ -2625,121 +2645,75 @@ const marketSession =
     );
 
 
-  const currentHA =
-    haCandles[
-      haCandles.length - 1
-    ];
-
-
-  const previousHA =
-    haCandles.length >= 2
-      ? haCandles[
-          haCandles.length - 2
-        ]
-      : null;
-
-
   const haRun =
-    getHARun(
+    analyzeHARun(
       haCandles
     );
 
 
-  const haBodyMomentum =
-    getHABodyMomentum(
-      haCandles
+  const currentHA =
+    classifyHeikinAshi(
+      haCandles[
+        haCandles.length - 1
+      ]
     );
 
 
   // ------------------------------------------------
   // PRESSURE SCORE
-  //
-  // Negative = Bears
-  // Positive = Bulls
-  //
-  // This is NOT probability.
-  // It drives the tug-of-war visualization.
   // ------------------------------------------------
 
-  let score = 0;
-
-  const bullReasons = [];
-  const bearReasons = [];
+  let bullScore = 0;
+  let bearScore = 0;
 
 
-  // ------------------------------------------------
-  // OLIVER STATE
-  // ------------------------------------------------
+  // Oliver market state
 
   if (
     oliver.state ===
-    "BULLISH"
+      "BULLISH"
   ) {
 
-    score += 18;
-
-    bullReasons.push(
-      "Oliver bullish state"
-    );
+    bullScore += 2;
   }
 
 
   if (
     oliver.state ===
-    "BEARISH"
+      "BEARISH"
   ) {
 
-    score -= 18;
-
-    bearReasons.push(
-      "Oliver bearish state"
-    );
+    bearScore += 2;
   }
 
 
-  // ------------------------------------------------
-  // STRUCTURE
-  // ------------------------------------------------
+  // Market structure
 
   if (
     oliver.structure ===
-    "HH_HL"
+      "HH_HL"
   ) {
 
-    score += 14;
-
-    bullReasons.push(
-      "HH/HL structure"
-    );
+    bullScore += 2;
   }
 
 
   if (
     oliver.structure ===
-    "LH_LL"
+      "LH_LL"
   ) {
 
-    score -= 14;
-
-    bearReasons.push(
-      "LH/LL structure"
-    );
+    bearScore += 2;
   }
 
 
-  // ------------------------------------------------
-  // TAKEOVER
-  // ------------------------------------------------
+  // Takeover candles
 
   if (
     oliver.bullishTakeover
   ) {
 
-    score += 12;
-
-    bullReasons.push(
-      "Bullish takeover"
-    );
+    bullScore += 2;
   }
 
 
@@ -2747,1059 +2721,1378 @@ const marketSession =
     oliver.bearishTakeover
   ) {
 
-    score -= 12;
-
-    bearReasons.push(
-      "Bearish takeover"
-    );
+    bearScore += 2;
   }
 
 
-  // ------------------------------------------------
-  // OLIVER ENTRY EVENTS
-  // ------------------------------------------------
-
-  if (
-    typeof oliver.entryEvent ===
-      "string" &&
-    oliver.entryEvent.startsWith(
-      "BULLISH"
-    )
-  ) {
-
-    score += 16;
-
-    bullReasons.push(
-      "Bullish Oliver entry event"
-    );
-  }
-
-
-  if (
-    typeof oliver.entryEvent ===
-      "string" &&
-    oliver.entryEvent.startsWith(
-      "BEARISH"
-    )
-  ) {
-
-    score -= 16;
-
-    bearReasons.push(
-      "Bearish Oliver entry event"
-    );
-  }
-
-
-  // ------------------------------------------------
-  // HEIKIN-ASHI CONTROL
-  // ------------------------------------------------
-
-  if (
-    currentHA.color ===
-    "GREEN"
-  ) {
-
-    score += 10;
-
-    bullReasons.push(
-      "Green HA control"
-    );
-  }
-
-
-  if (
-    currentHA.color ===
-    "RED"
-  ) {
-
-    score -= 10;
-
-    bearReasons.push(
-      "Red HA control"
-    );
-  }
-
-
-  // ------------------------------------------------
-  // CONSECUTIVE HA RUN
-  // ------------------------------------------------
-
-  if (
-    haRun.color ===
-    "GREEN"
-  ) {
-
-    const runBonus =
-      Math.min(
-        haRun.count * 4,
-        20
-      );
-
-
-    score +=
-      runBonus;
-
-
-    if (
-      haRun.count >= 2
-    ) {
-
-      bullReasons.push(
-        `${haRun.count} green HA candles`
-      );
-
-    }
-
-  }
-
-
-  if (
-    haRun.color ===
-    "RED"
-  ) {
-
-    const runBonus =
-      Math.min(
-        haRun.count * 4,
-        20
-      );
-
-
-    score -=
-      runBonus;
-
-
-    if (
-      haRun.count >= 2
-    ) {
-
-      bearReasons.push(
-        `${haRun.count} red HA candles`
-      );
-
-    }
-
-  }
-
-
-  // ------------------------------------------------
-  // NO OPPOSITE WICK = CONVICTION
-  // ------------------------------------------------
-
-  if (
-    currentHA.color ===
-      "GREEN" &&
-    currentHA.noLowerWick
-  ) {
-
-    score += 10;
-
-    bullReasons.push(
-      "Green HA has no lower wick"
-    );
-  }
-
-
-  if (
-    currentHA.color ===
-      "RED" &&
-    currentHA.noUpperWick
-  ) {
-
-    score -= 10;
-
-    bearReasons.push(
-      "Red HA has no upper wick"
-    );
-  }
-
-
-  // ------------------------------------------------
-  // EXPANSION
-  // ------------------------------------------------
+  // Expansion
 
   if (
     oliver.expansion ===
-    "GREEN"
+      "green"
   ) {
 
-    score += 8;
-
-    bullReasons.push(
-      "Bullish expansion"
-    );
+    bullScore += 2;
   }
 
 
   if (
     oliver.expansion ===
-    "RED"
+      "red"
   ) {
 
-    score -= 8;
-
-    bearReasons.push(
-      "Bearish expansion"
-    );
+    bearScore += 2;
   }
 
 
-  // ------------------------------------------------
-  // 200 SMA CONTEXT
-  //
-  // Deliberately lighter weighting.
-  // We want context without allowing the 200 SMA
-  // to automatically veto an intraday trend.
-  // ------------------------------------------------
+  // Heikin-Ashi current candle
 
   if (
-    oliver.sma200Context ===
-    "ABOVE_200"
-  ) {
-
-    score += 6;
-
-    bullReasons.push(
-      "Price above 200 SMA"
-    );
-  }
-
-
-  if (
-    oliver.sma200Context ===
-    "BELOW_200"
-  ) {
-
-    score -= 6;
-
-    bearReasons.push(
-      "Price below 200 SMA"
-    );
-  }
-
-
-  // ------------------------------------------------
-  // CAP SCORE
-  // ------------------------------------------------
-
-  score =
-    Math.max(
-      -100,
-      Math.min(
-        100,
-        score
-      )
-    );
-
-
-  // ------------------------------------------------
-  // CONTROL
-  // ------------------------------------------------
-
-  let control =
-    "NEUTRAL";
-
-
-  if (
-    score >= 15
-  ) {
-    control =
-      "BULLS";
-  }
-
-
-  if (
-    score <= -15
-  ) {
-    control =
-      "BEARS";
-  }
-
-
-  // ------------------------------------------------
-  // PRESSURE LABEL
-  // ------------------------------------------------
-
-  const absoluteScore =
-    Math.abs(score);
-
-
-  let pressure =
-    "BALANCED";
-
-
-  if (
-    absoluteScore >= 75
-  ) {
-
-    pressure =
-      "DOMINANT";
-
-  } else if (
-    absoluteScore >= 55
-  ) {
-
-    pressure =
-      "STRONG";
-
-  } else if (
-    absoluteScore >= 35
-  ) {
-
-    pressure =
-      "CONTROL";
-
-  } else if (
-    absoluteScore >= 15
-  ) {
-
-    pressure =
-    "EARLY";
-
-  }
-
-
-  // ------------------------------------------------
-  // HA CONTROL
-  // ------------------------------------------------
-
-  let haControl =
-    "INDECISION";
-
-
-  if (
-    currentHA.color ===
+    currentHA.direction ===
       "GREEN"
   ) {
 
-    haControl =
-      currentHA.noLowerWick
-        ? "BUYERS_STRONG"
-        : "BUYERS";
-
+    bullScore++;
   }
 
 
   if (
-    currentHA.color ===
+    currentHA.direction ===
       "RED"
   ) {
 
-    haControl =
-      currentHA.noUpperWick
-        ? "SELLERS_STRONG"
-        : "SELLERS";
-
+    bearScore++;
   }
 
 
   if (
-    currentHA.isDoji
+    currentHA.type ===
+      "BUYERS_STRONG"
   ) {
 
-    haControl =
-      "INDECISION";
-
-  }
-
-
-  // ------------------------------------------------
-  // EXHAUSTION EVIDENCE
-  // ------------------------------------------------
-
-  let bullExhaustion = 0;
-  let bearExhaustion = 0;
-
-  const exhaustionReasons = [];
-
-
-  // Bulls currently control:
-  // look for evidence that bullish control is fading.
-
-  if (
-    control === "BULLS"
-  ) {
-
-    if (
-      currentHA.isDoji
-    ) {
-
-      bullExhaustion++;
-
-      exhaustionReasons.push(
-        "HA indecision"
-      );
-
-    }
-
-
-    if (
-      currentHA.color ===
-        "GREEN" &&
-      !currentHA.noLowerWick
-    ) {
-
-      bullExhaustion++;
-
-      exhaustionReasons.push(
-        "Lower HA wick developing"
-      );
-
-    }
-
-
-    if (
-      haBodyMomentum ===
-        "SHRINKING"
-    ) {
-
-      bullExhaustion++;
-
-      exhaustionReasons.push(
-        "HA bodies shrinking"
-      );
-
-    }
-
-
-    if (
-      previousHA &&
-      previousHA.color ===
-        "GREEN" &&
-      currentHA.color ===
-        "RED"
-    ) {
-
-      bullExhaustion += 2;
-
-      exhaustionReasons.push(
-        "HA changed red"
-      );
-
-    }
-
-
-    if (
-      Number.isFinite(
-        Number(oliver.sma8)
-      ) &&
-      price <
-        Number(oliver.sma8)
-    ) {
-
-      bullExhaustion++;
-
-      exhaustionReasons.push(
-        "Price below 8 SMA"
-      );
-
-    }
-
-
-    if (
-      oliver.bearishTakeover
-    ) {
-
-      bullExhaustion += 2;
-
-      exhaustionReasons.push(
-        "Bearish takeover"
-      );
-
-    }
-
-  }
-
-
-  // Bears currently control:
-  // look for evidence that bearish control is fading.
-
-  if (
-    control === "BEARS"
-  ) {
-
-    if (
-      currentHA.isDoji
-    ) {
-
-      bearExhaustion++;
-
-      exhaustionReasons.push(
-        "HA indecision"
-      );
-
-    }
-
-
-    if (
-      currentHA.color ===
-        "RED" &&
-      !currentHA.noUpperWick
-    ) {
-
-      bearExhaustion++;
-
-      exhaustionReasons.push(
-        "Upper HA wick developing"
-      );
-
-    }
-
-
-    if (
-      haBodyMomentum ===
-        "SHRINKING"
-    ) {
-
-      bearExhaustion++;
-
-      exhaustionReasons.push(
-        "HA bodies shrinking"
-      );
-
-    }
-
-
-    if (
-      previousHA &&
-      previousHA.color ===
-        "RED" &&
-      currentHA.color ===
-        "GREEN"
-    ) {
-
-      bearExhaustion += 2;
-
-      exhaustionReasons.push(
-        "HA changed green"
-      );
-
-    }
-
-
-    if (
-      Number.isFinite(
-        Number(oliver.sma8)
-      ) &&
-      price >
-        Number(oliver.sma8)
-    ) {
-
-      bearExhaustion++;
-
-      exhaustionReasons.push(
-        "Price above 8 SMA"
-      );
-
-    }
-
-
-    if (
-      oliver.bullishTakeover
-    ) {
-
-      bearExhaustion += 2;
-
-      exhaustionReasons.push(
-        "Bullish takeover"
-      );
-
-    }
-
-  }
-
-
-  const exhaustionScore =
-    control === "BULLS"
-      ? bullExhaustion
-      : control === "BEARS"
-      ? bearExhaustion
-      : 0;
-
-
-  // ------------------------------------------------
-  // CHANGE WATCH
-  // ------------------------------------------------
-
-  let changeWatch =
-    "OFF";
-
-
-  if (
-    exhaustionScore >= 2
-  ) {
-
-    changeWatch =
-      "WATCH";
-
+    bullScore += 2;
   }
 
 
   if (
-    exhaustionScore >= 4
+    currentHA.type ===
+      "SELLERS_STRONG"
   ) {
 
-    changeWatch =
-      "WARNING";
+    bearScore += 2;
+  }
 
+
+  // Heikin-Ashi consecutive run
+
+  if (
+    haRun.direction ===
+      "GREEN"
+  ) {
+
+    bullScore +=
+      Math.min(
+        haRun.count,
+        3
+      );
+  }
+
+
+  if (
+    haRun.direction ===
+      "RED"
+  ) {
+
+    bearScore +=
+      Math.min(
+        haRun.count,
+        3
+      );
+  }
+
+
+  // Oliver entry-recognition patterns
+
+  if (
+    oliver.compressionExpansion ===
+      "green"
+  ) {
+
+    bullScore += 2;
+  }
+
+
+  if (
+    oliver.compressionExpansion ===
+      "red"
+  ) {
+
+    bearScore += 2;
+  }
+
+
+  if (
+    oliver.reversalCluster ===
+      "green"
+  ) {
+
+    bullScore += 2;
+  }
+
+
+  if (
+    oliver.reversalCluster ===
+      "red"
+  ) {
+
+    bearScore += 2;
+  }
+
+
+  // 200 SMA alignment is supporting context,
+  // not an entry by itself.
+
+  if (
+    oliver.sma200Alignment ===
+      "ALIGNED" &&
+    oliver.state ===
+      "BULLISH"
+  ) {
+
+    bullScore++;
+  }
+
+
+  if (
+    oliver.sma200Alignment ===
+      "ALIGNED" &&
+    oliver.state ===
+      "BEARISH"
+  ) {
+
+    bearScore++;
   }
 
 
   // ------------------------------------------------
-  // TREND PHASE
+  // RAW PRESSURE DIRECTION
   // ------------------------------------------------
 
-  let phase =
+  const scoreDifference =
+    bullScore - bearScore;
+
+
+  let pressureDirection =
     "NEUTRAL";
 
 
   if (
-    control !== "NEUTRAL" &&
-    absoluteScore >= 15 &&
-    absoluteScore < 35
+    scoreDifference >= 2
   ) {
 
-    phase =
+    pressureDirection =
+      "BULL";
+  }
+
+
+  if (
+    scoreDifference <= -2
+  ) {
+
+    pressureDirection =
+      "BEAR";
+  }
+
+
+  // ------------------------------------------------
+  // PRESSURE STRENGTH
+  // ------------------------------------------------
+
+  const winningScore =
+    Math.max(
+      bullScore,
+      bearScore
+    );
+
+
+  const absoluteDifference =
+    Math.abs(
+      scoreDifference
+    );
+
+
+  let strength =
+    "NEUTRAL";
+
+
+  if (
+    pressureDirection !==
+      "NEUTRAL"
+  ) {
+
+    strength =
       "EARLY";
-
   }
 
 
   if (
-    control !== "NEUTRAL" &&
-    absoluteScore >= 35 &&
-    absoluteScore < 55
+    pressureDirection !==
+      "NEUTRAL" &&
+    winningScore >= 6 &&
+    absoluteDifference >= 4
   ) {
 
-    phase =
-      "DEVELOPING";
-
+    strength =
+      "STRONG";
   }
 
 
   if (
-    control !== "NEUTRAL" &&
-    absoluteScore >= 55
+    pressureDirection !==
+      "NEUTRAL" &&
+    winningScore >= 9 &&
+    absoluteDifference >= 6
   ) {
 
-    phase =
-      "ACTIVE";
-
-  }
-
-
-  if (
-    control !== "NEUTRAL" &&
-    haRun.count >= 6 &&
-    absoluteScore >= 55
-  ) {
-
-    phase =
-      "EXTENDED";
-
-  }
-
-
-  if (
-    changeWatch ===
-      "WATCH"
-  ) {
-
-    phase =
-      "WEAKENING";
-
-  }
-
-
-  if (
-    changeWatch ===
-      "WARNING"
-  ) {
-
-    phase =
-      "REVERSAL_WATCH";
-
+    strength =
+      "DOMINANT";
   }
 
 
   // ------------------------------------------------
-  // ENTRY INFORMATION
+  // CURRENT BATTLE STATE
+  // ------------------------------------------------
+
+  let battleState =
+    "BATTLE_NEUTRAL";
+
+
+  if (
+    pressureDirection ===
+      "BULL"
+  ) {
+
+    battleState =
+      "BULLS_IN_CONTROL";
+  }
+
+
+  if (
+    pressureDirection ===
+      "BEAR"
+  ) {
+
+    battleState =
+      "BEARS_IN_CONTROL";
+  }
+
+
+  // ------------------------------------------------
+  // APPLY PERSISTENT TREND MEMORY
+  // ------------------------------------------------
+
+  const lockedTrend =
+    applyTrendLock(
+      pressureDirection,
+      strength,
+      current.time
+    );
+
+
+  // ------------------------------------------------
+  // ENTRY STATUS
   //
-  // Actual entry prices always come from Oliver's
-  // REAL candle trigger, never HA synthetic prices.
+  // Important:
+  // ENTRY describes a developing opportunity.
+  // MANAGEMENT describes what to do with an
+  // already-established trend.
   // ------------------------------------------------
 
-  let entryReady = false;
-
-  let entryDirection =
-    null;
-
-  let entryPrice =
-    null;
-
-  let invalidation =
-    null;
-
-
-  if (
-    oliver.action ===
-    "CALL_SETUP"
-  ) {
-
-    entryReady = true;
-
-    entryDirection =
-      "CALL";
-
-    entryPrice =
-      oliver.trigger;
-
-    invalidation =
-      oliver.invalidation;
-
-  }
-
-
-  if (
-    oliver.action ===
-    "PUT_SETUP"
-  ) {
-
-    entryReady = true;
-
-    entryDirection =
-      "PUT";
-
-    entryPrice =
-      oliver.trigger;
-
-    invalidation =
-      oliver.invalidation;
-
-  }
-
-
-  // ------------------------------------------------
-  // ACTION
-  // ------------------------------------------------
-
-  let action =
+  let entryStatus =
     "WAIT";
 
 
   if (
-    control === "BULLS"
+    pressureDirection === "BULL" &&
+    (
+      strength === "STRONG" ||
+      strength === "DOMINANT"
+    )
   ) {
 
-    if (
-      changeWatch ===
-      "WARNING"
-    ) {
-
-      action =
-        "BULL_TREND_EXIT_WARNING";
-
-    } else if (
-      changeWatch ===
-      "WATCH"
-    ) {
-
-      action =
-        "HOLD_BULL_WATCH";
-
-    } else if (
-      entryReady &&
-      entryDirection ===
-        "CALL"
-    ) {
-
-      action =
-        "CALL_ENTRY_READY";
-
-    } else {
-
-      action =
-        "HOLD_BULL_TREND";
-
-    }
-
+    entryStatus =
+      "CALL_ENTRY_ACTIVE";
   }
 
 
   if (
-    control === "BEARS"
+    pressureDirection === "BEAR" &&
+    (
+      strength === "STRONG" ||
+      strength === "DOMINANT"
+    )
   ) {
 
-    if (
-      changeWatch ===
-      "WARNING"
-    ) {
-
-      action =
-        "BEAR_TREND_EXIT_WARNING";
-
-    } else if (
-      changeWatch ===
-      "WATCH"
-    ) {
-
-      action =
-        "HOLD_BEAR_WATCH";
-
-    } else if (
-      entryReady &&
-      entryDirection ===
-        "PUT"
-    ) {
-
-      action =
-        "PUT_ENTRY_READY";
-
-    } else {
-
-      action =
-        "HOLD_BEAR_TREND";
-
-    }
-
-  }
-
-
-  // ------------------------------------------------
-  // 200 SMA DISPLAY CONTEXT
-  // ------------------------------------------------
-
-  let sma200Context =
-    "UNAVAILABLE";
-
-
-  if (
-    oliver.sma200Context ===
-      "ABOVE_200"
-  ) {
-
-    sma200Context =
-      control === "BULLS"
-        ? "WITH_TREND"
-        : "COUNTER_TREND";
-
+    entryStatus =
+      "PUT_ENTRY_ACTIVE";
   }
 
 
   if (
-    oliver.sma200Context ===
-      "BELOW_200"
+    pressureDirection === "BULL" &&
+    strength === "EARLY"
   ) {
 
-    sma200Context =
-      control === "BEARS"
-        ? "WITH_TREND"
-        : "COUNTER_TREND";
+    entryStatus =
+      "CALL_ENTRY_DEVELOPING";
+  }
 
+
+  if (
+    pressureDirection === "BEAR" &&
+    strength === "EARLY"
+  ) {
+
+    entryStatus =
+      "PUT_ENTRY_DEVELOPING";
+  }
+
+
+  // If current pressure is opposite the locked
+  // trend, it is a warning first — not an
+  // automatic opposite entry.
+
+  if (
+    lockedTrend.establishedTrend ===
+      "BULL" &&
+    pressureDirection ===
+      "BEAR"
+  ) {
+
+    entryStatus =
+      "BEAR_REVERSAL_WATCH";
+  }
+
+
+  if (
+    lockedTrend.establishedTrend ===
+      "BEAR" &&
+    pressureDirection ===
+      "BULL"
+  ) {
+
+    entryStatus =
+      "BULL_REVERSAL_WATCH";
   }
 
 
   // ------------------------------------------------
-  // RESULT
+  // RETURN TREND BATTLE
   // ------------------------------------------------
 
   return {
 
-    control,
-
-    pressure,
-
-    // -100 = maximum Bear pull
-    // 0 = center
-    // +100 = maximum Bull pull
-
-    ropePosition:
-      score,
-
-    phase,
-
-    action,
-    entryMarker: {
-  bull: 35,
-  bear: -35,
-  crossed:
-    score >= 35
-      ? "BULL_ENTRY"
-      : score <= -35
-        ? "BEAR_ENTRY"
-        : "NONE"
-},
+    time:
+      current.time,
 
     price:
       Number(
-        price.toFixed(4)
+        current.close
       ),
 
-    haControl,
+    battleState,
 
-    haColor:
-      currentHA.color,
+    pressureDirection,
 
-    haRunColor:
-      haRun.color,
+    strength,
 
-    haRunCandles:
+    bullScore,
+
+    bearScore,
+
+    scoreDifference,
+
+    entryStatus,
+
+    establishedTrend:
+      lockedTrend.establishedTrend,
+
+    management:
+      lockedTrend.management,
+
+    reversalWatch:
+      lockedTrend.reversalWatch,
+
+    oppositeConfirmations:
+      lockedTrend.oppositeConfirmations,
+
+    haDirection:
+      currentHA.direction,
+
+    haType:
+      currentHA.type,
+
+    haRunDirection:
+      haRun.direction,
+
+    haRunCount:
       haRun.count,
 
-    haBodyMomentum,
+    haRunStrength:
+      haRun.strength,
 
-    haDoji:
-      currentHA.isDoji,
-
-    haNoLowerWick:
-      currentHA.noLowerWick,
-
-    haNoUpperWick:
-      currentHA.noUpperWick,
-
-    changeWatch,
-
-    exhaustionScore,
-
-    exhaustionReasons,
-
-    entryReady,
-
-    entryDirection,
-
-    entryPrice,
-
-    invalidation,
-
-    entryEvent:
-      oliver.entryEvent ||
-      "NONE",
-
-    sma8:
-      oliver.sma8,
-
-    sma20:
-      oliver.sma20,
-
-    sma200:
-      oliver.sma200,
-
-    sma200Context,
-
-    structure:
-      oliver.structure,
-
-    bullEvidence:
-      bullReasons,
-
-    bearEvidence:
-      bearReasons,
-
-    analyzedCandle:
-      current.time
+    oliver
 
   };
 
 }
-// ===============================================
+// ==================================================
 // TREND EVENT RECORDER
-// ===============================================
+// ==================================================
 
-function recordTrendEvent(analysis) {
-  if (!analysis) return null;
+function recordTrendEvent(
+  analysis
+) {
 
-  const control = analysis.control || "NEUTRAL";
-  const action = analysis.action || "WAIT";
-  const price = Number(analysis.price);
-
-  if (!Number.isFinite(price)) return null;
-
-  // A new event is created when the meaningful
-  // trend state/action combination changes.
-  const eventKey = `${control}|${action}`;
-
-  if (eventKey === lastTrendEventKey) {
-    return null;
+  if (
+    !analysis ||
+    !analysis.time
+  ) {
+    return;
   }
+
+
+  const eventKey = [
+    analysis.time,
+    analysis.battleState,
+    analysis.strength,
+    analysis.entryStatus,
+    analysis.establishedTrend,
+    analysis.management
+  ].join("|");
+
+
+  // Avoid recording the exact same event twice.
+
+  if (
+    eventKey ===
+      lastTrendEventKey
+  ) {
+    return;
+  }
+
+
+  lastTrendEventKey =
+    eventKey;
+
 
   const event = {
-    time: analysis.analyzedCandle || new Date().toISOString(),
-    price,
-    control,
-    pressure: analysis.pressure || "UNKNOWN",
-    ropePosition: analysis.ropePosition ?? 0,
-    phase: analysis.phase || "UNKNOWN",
-    action,
 
-    entryReady: analysis.entryReady ?? false,
-    entryDirection: analysis.entryDirection || "NONE",
-    entryPrice: analysis.entryPrice ?? null,
-    invalidation: analysis.invalidation ?? null,
-    entryEvent: analysis.entryEvent || "NONE",
+    time:
+      analysis.time,
 
-    haColor: analysis.haColor || "UNKNOWN",
-    haRunColor: analysis.haRunColor || "UNKNOWN",
-    haRunCandles: analysis.haRunCandles ?? 0,
-    haDoji: analysis.haDoji ?? false,
+    price:
+      analysis.price,
 
-    sma8: analysis.sma8 ?? null,
-    sma20: analysis.sma20 ?? null,
-    sma200: analysis.sma200 ?? null,
-    sma200Context: analysis.sma200Context || "UNAVAILABLE",
+    battleState:
+      analysis.battleState,
 
-    structure: analysis.structure || "UNKNOWN",
+    pressureDirection:
+      analysis.pressureDirection,
 
-    bullEvidence: analysis.bullEvidence || [],
-    bearEvidence: analysis.bearEvidence || []
+    strength:
+      analysis.strength,
+
+    bullScore:
+      analysis.bullScore,
+
+    bearScore:
+      analysis.bearScore,
+
+    scoreDifference:
+      analysis.scoreDifference,
+
+    entryStatus:
+      analysis.entryStatus,
+
+    establishedTrend:
+      analysis.establishedTrend,
+
+    management:
+      analysis.management,
+
+    reversalWatch:
+      analysis.reversalWatch,
+
+    oppositeConfirmations:
+      analysis.oppositeConfirmations,
+
+    haDirection:
+      analysis.haDirection,
+
+    haType:
+      analysis.haType,
+
+    haRunDirection:
+      analysis.haRunDirection,
+
+    haRunCount:
+      analysis.haRunCount,
+
+    haRunStrength:
+      analysis.haRunStrength,
+
+    oliverState:
+      analysis.oliver?.state ||
+      "UNAVAILABLE",
+
+    oliverStructure:
+      analysis.oliver?.structure ||
+      "UNAVAILABLE",
+
+    sma8:
+      analysis.oliver?.sma8 ??
+      null,
+
+    sma20:
+      analysis.oliver?.sma20 ??
+      null,
+
+    sma200:
+      analysis.oliver?.sma200 ??
+      null,
+
+    bullishChecks:
+      analysis.oliver?.bullishChecks ??
+      0,
+
+    bearishChecks:
+      analysis.oliver?.bearishChecks ??
+      0
+
   };
 
-  trendEventHistory.push(event);
 
-  if (trendEventHistory.length > MAX_TREND_EVENTS) {
-    trendEventHistory.shift();
-  }
-
-  lastTrendEventKey = eventKey;
-
-  console.log(
-    `TREND EVENT: ${control} | ${action} | GOOGL $${price}`
+  trendEventHistory.push(
+    event
   );
 
-  return event;
+
+  if (
+    trendEventHistory.length >
+    MAX_TREND_EVENTS
+  ) {
+
+    trendEventHistory =
+      trendEventHistory.slice(
+        -MAX_TREND_EVENTS
+      );
+  }
+
+
+  console.log(
+    "Trend event:",
+    JSON.stringify(event)
+  );
+
 }
 
 
 // ==================================================
-// START MARKET DATA SYSTEM
+// CURRENT LIVE ANALYSIS
 // ==================================================
 
-seedHistoricalCandles();
+function getCurrentAnalysis() {
 
-connectAlpacaStream();
+  if (
+    !Array.isArray(
+      completedCandles
+    ) ||
+    completedCandles.length <
+      21
+  ) {
+
+    return {
+
+      battleState:
+        "INSUFFICIENT_DATA",
+
+      pressureDirection:
+        "NEUTRAL",
+
+      strength:
+        "NONE",
+
+      entryStatus:
+        "WAIT",
+
+      establishedTrend:
+        trendLock.direction,
+
+      management:
+        "WAIT",
+
+      reversalWatch:
+        false,
+
+      bullScore: 0,
+
+      bearScore: 0
+
+    };
+  }
+
+
+  return analyzeTrendBattle(
+    completedCandles
+  );
+
+}
 
 
 // ==================================================
-// LIVE GOOGL ENDPOINT
+// MARKET HOURS / CENTRAL TIME
+// ==================================================
+
+// U.S. equity regular session:
+// 9:30 AM - 4:00 PM Eastern
+// 8:30 AM - 3:00 PM Central.
+//
+// We calculate using America/Chicago so DST is
+// handled automatically.
+
+function getCentralTimeParts(
+  date = new Date()
+) {
+
+  const formatter =
+    new Intl.DateTimeFormat(
+      "en-US",
+      {
+
+        timeZone:
+          "America/Chicago",
+
+        year:
+          "numeric",
+
+        month:
+          "2-digit",
+
+        day:
+          "2-digit",
+
+        weekday:
+          "short",
+
+        hour:
+          "2-digit",
+
+        minute:
+          "2-digit",
+
+        second:
+          "2-digit",
+
+        hour12:
+          false
+
+      }
+    );
+
+
+  const parts =
+    formatter.formatToParts(
+      date
+    );
+
+
+  const values = {};
+
+
+  for (
+    const part of parts
+  ) {
+
+    if (
+      part.type !==
+        "literal"
+    ) {
+
+      values[
+        part.type
+      ] = part.value;
+    }
+  }
+
+
+  return {
+
+    year:
+      Number(values.year),
+
+    month:
+      Number(values.month),
+
+    day:
+      Number(values.day),
+
+    weekday:
+      values.weekday,
+
+    hour:
+      Number(values.hour),
+
+    minute:
+      Number(values.minute),
+
+    second:
+      Number(values.second)
+
+  };
+
+}
+
+
+// ==================================================
+// U.S. MARKET HOLIDAYS
+// ==================================================
+
+function nthWeekdayOfMonth(
+  year,
+  month,
+  weekday,
+  occurrence
+) {
+
+  const first =
+    new Date(
+      Date.UTC(
+        year,
+        month - 1,
+        1
+      )
+    );
+
+
+  const offset =
+    (
+      weekday -
+      first.getUTCDay() +
+      7
+    ) % 7;
+
+
+  return (
+    1 +
+    offset +
+    (
+      occurrence - 1
+    ) * 7
+  );
+
+}
+
+
+function lastWeekdayOfMonth(
+  year,
+  month,
+  weekday
+) {
+
+  const last =
+    new Date(
+      Date.UTC(
+        year,
+        month,
+        0
+      )
+    );
+
+
+  const offset =
+    (
+      last.getUTCDay() -
+      weekday +
+      7
+    ) % 7;
+
+
+  return (
+    last.getUTCDate() -
+    offset
+  );
+
+}
+
+
+function observedHoliday(
+  year,
+  month,
+  day
+) {
+
+  const date =
+    new Date(
+      Date.UTC(
+        year,
+        month - 1,
+        day
+      )
+    );
+
+
+  const weekday =
+    date.getUTCDay();
+
+
+  if (
+    weekday === 6
+  ) {
+
+    date.setUTCDate(
+      date.getUTCDate() - 1
+    );
+  }
+
+
+  if (
+    weekday === 0
+  ) {
+
+    date.setUTCDate(
+      date.getUTCDate() + 1
+    );
+  }
+  // ==================================================
+// EASTER / GOOD FRIDAY
+// ==================================================
+
+function getEasterSunday(
+  year
+) {
+
+  const a =
+    year % 19;
+
+  const b =
+    Math.floor(
+      year / 100
+    );
+
+  const c =
+    year % 100;
+
+  const d =
+    Math.floor(
+      b / 4
+    );
+
+  const e =
+    b % 4;
+
+  const f =
+    Math.floor(
+      (b + 8) / 25
+    );
+
+  const g =
+    Math.floor(
+      (b - f + 1) / 3
+    );
+
+  const h =
+    (
+      19 * a +
+      b -
+      d -
+      g +
+      15
+    ) % 30;
+
+  const i =
+    Math.floor(
+      c / 4
+    );
+
+  const k =
+    c % 4;
+
+  const l =
+    (
+      32 +
+      2 * e +
+      2 * i -
+      h -
+      k
+    ) % 7;
+
+  const m =
+    Math.floor(
+      (
+        a +
+        11 * h +
+        22 * l
+      ) / 451
+    );
+
+  const month =
+    Math.floor(
+      (
+        h +
+        l -
+        7 * m +
+        114
+      ) / 31
+    );
+
+  const day =
+    (
+      (
+        h +
+        l -
+        7 * m +
+        114
+      ) % 31
+    ) + 1;
+
+
+  return new Date(
+    Date.UTC(
+      year,
+      month - 1,
+      day
+    )
+  );
+
+}
+
+
+function dateKeyFromUTC(
+  date
+) {
+
+  return [
+    date.getUTCFullYear(),
+
+    String(
+      date.getUTCMonth() + 1
+    ).padStart(
+      2,
+      "0"
+    ),
+
+    String(
+      date.getUTCDate()
+    ).padStart(
+      2,
+      "0"
+    )
+
+  ].join("-");
+}
+
+
+// ==================================================
+// NYSE FULL-DAY HOLIDAYS
+// ==================================================
+
+function getMarketHolidays(
+  year
+) {
+
+  const holidays =
+    new Set();
+
+
+  // New Year's Day
+
+  holidays.add(
+    observedHoliday(
+      year,
+      1,
+      1
+    )
+  );
+
+
+  // Martin Luther King Jr. Day
+  // Third Monday in January
+
+  const mlkDay =
+    nthWeekdayOfMonth(
+      year,
+      1,
+      1,
+      3
+    );
+
+
+  holidays.add(
+    `${year}-01-${String(
+      mlkDay
+    ).padStart(2, "0")}`
+  );
+
+
+  // Presidents Day
+  // Third Monday in February
+
+  const presidentsDay =
+    nthWeekdayOfMonth(
+      year,
+      2,
+      1,
+      3
+    );
+
+
+  holidays.add(
+    `${year}-02-${String(
+      presidentsDay
+    ).padStart(2, "0")}`
+  );
+
+
+  // Good Friday
+
+  const easter =
+    getEasterSunday(
+      year
+    );
+
+
+  const goodFriday =
+    new Date(
+      easter
+    );
+
+
+  goodFriday.setUTCDate(
+    goodFriday.getUTCDate() - 2
+  );
+
+
+  holidays.add(
+    dateKeyFromUTC(
+      goodFriday
+    )
+  );
+
+
+  // Memorial Day
+  // Last Monday in May
+
+  const memorialDay =
+    lastWeekdayOfMonth(
+      year,
+      5,
+      1
+    );
+
+
+  holidays.add(
+    `${year}-05-${String(
+      memorialDay
+    ).padStart(2, "0")}`
+  );
+
+
+  // Juneteenth
+
+  holidays.add(
+    observedHoliday(
+      year,
+      6,
+      19
+    )
+  );
+
+
+  // Independence Day
+
+  holidays.add(
+    observedHoliday(
+      year,
+      7,
+      4
+    )
+  );
+
+
+  // Labor Day
+  // First Monday in September
+
+  const laborDay =
+    nthWeekdayOfMonth(
+      year,
+      9,
+      1,
+      1
+    );
+
+
+  holidays.add(
+    `${year}-09-${String(
+      laborDay
+    ).padStart(2, "0")}`
+  );
+
+
+  // Thanksgiving
+  // Fourth Thursday in November
+
+  const thanksgiving =
+    nthWeekdayOfMonth(
+      year,
+      11,
+      4,
+      4
+    );
+
+
+  holidays.add(
+    `${year}-11-${String(
+      thanksgiving
+    ).padStart(2, "0")}`
+  );
+
+
+  // Christmas Day
+
+  holidays.add(
+    observedHoliday(
+      year,
+      12,
+      25
+    )
+  );
+
+
+  return holidays;
+}
+
+
+// ==================================================
+// MARKET CLOCK
+// ==================================================
+
+function getMarketClock() {
+
+  const now =
+    new Date();
+
+
+  const central =
+    getCentralTimeParts(
+      now
+    );
+
+
+  const dateKey =
+    [
+      central.year,
+
+      String(
+        central.month
+      ).padStart(
+        2,
+        "0"
+      ),
+
+      String(
+        central.day
+      ).padStart(
+        2,
+        "0"
+      )
+
+    ].join("-");
+
+
+  const holidays =
+    getMarketHolidays(
+      central.year
+    );
+
+
+  const isWeekend =
+    central.weekday === "Sat" ||
+    central.weekday === "Sun";
+
+
+  const isHoliday =
+    holidays.has(
+      dateKey
+    );
+
+
+  const minutesNow =
+    central.hour * 60 +
+    central.minute;
+
+
+  const regularOpen =
+    8 * 60 + 30;
+
+
+  const regularClose =
+    15 * 60;
+
+
+  const isRegularSession =
+    !isWeekend &&
+    !isHoliday &&
+    minutesNow >=
+      regularOpen &&
+    minutesNow <
+      regularClose;
+
+
+  const displayTime =
+    new Intl.DateTimeFormat(
+      "en-US",
+      {
+
+        timeZone:
+          "America/Chicago",
+
+        hour:
+          "numeric",
+
+        minute:
+          "2-digit",
+
+        second:
+          "2-digit",
+
+        hour12:
+          true
+
+      }
+    ).format(now);
+
+
+  const displayDate =
+    new Intl.DateTimeFormat(
+      "en-US",
+      {
+
+        timeZone:
+          "America/Chicago",
+
+        weekday:
+          "short",
+
+        month:
+          "short",
+
+        day:
+          "numeric"
+
+      }
+    ).format(now);
+
+
+  let reason =
+    "REGULAR_SESSION";
+
+
+  if (isWeekend) {
+
+    reason =
+      "WEEKEND";
+
+  } else if (isHoliday) {
+
+    reason =
+      "MARKET_HOLIDAY";
+
+  } else if (
+    minutesNow <
+      regularOpen
+  ) {
+
+    reason =
+      "PRE_MARKET";
+
+  } else if (
+    minutesNow >=
+      regularClose
+  ) {
+
+    reason =
+      "AFTER_HOURS";
+  }
+
+
+  return {
+
+    status:
+      isRegularSession
+        ? "OPEN"
+        : "CLOSED",
+
+    isOpen:
+      isRegularSession,
+
+    reason,
+
+    timeZone:
+      "America/Chicago",
+
+    time:
+      displayTime,
+
+    date:
+      displayDate,
+
+    dateKey
+
+  };
+
+}
+  // ==================================================
+// API - HEALTH
 // ==================================================
 
 app.get(
-  "/googl-live",
+  "/",
   (req, res) => {
+
+    res.redirect(
+      "/googl-live"
+    );
+
+  }
+);
+
+
+// ==================================================
+// API - LIVE STATE
+// ==================================================
+
+app.get(
+  "/api/googl-live",
+  (req, res) => {
+
+    const analysis =
+      getCurrentAnalysis();
+
+
+    const marketClock =
+      getMarketClock();
+
 
     res.json({
 
       symbol:
         "GOOGL",
 
-      timeframe:
-        "2Min",
-
       streamStatus:
         alpacaStreamStatus,
 
-      historySeeded:
-        historySeeded,
+      historySeeded,
 
       completedCandleCount:
         completedCandles.length,
@@ -3807,11 +4100,28 @@ app.get(
       latestTrade:
         latestGOOGLTrade,
 
-      developing2MinCandle:
-        developingCandle,
+      developingCandle,
 
-      completedCandles:
-        completedCandles
+      market:
+        marketClock,
+
+      analysis,
+
+      trendLock: {
+
+        direction:
+          trendLock.direction,
+
+        oppositeConfirmations:
+          trendLock.oppositeConfirmations,
+
+        lastProcessedCandle:
+          trendLock.lastProcessedCandle
+
+      },
+
+      updatedAt:
+        new Date().toISOString()
 
     });
 
@@ -3820,23 +4130,17 @@ app.get(
 
 
 // ==================================================
-// COMPLETED CANDLE HISTORY
+// API - COMPLETED CANDLES
 // ==================================================
 
 app.get(
-  "/googl-history",
+  "/api/googl-candles",
   (req, res) => {
 
     res.json({
 
       symbol:
         "GOOGL",
-
-      timeframe:
-        "2Min",
-
-      historySeeded:
-        historySeeded,
 
       count:
         completedCandles.length,
@@ -3851,35 +4155,23 @@ app.get(
 
 
 // ==================================================
-// ROOT STATUS
+// API - TREND EVENTS
 // ==================================================
 
 app.get(
-  "/",
+  "/api/trend-events",
   (req, res) => {
 
     res.json({
 
-      status:
-        "online",
+      symbol:
+        "GOOGL",
 
-      service:
-        "BVB Trading Assistant",
+      count:
+        trendEventHistory.length,
 
-      alpacaConfigured:
-        Boolean(
-          ALPACA_API_KEY &&
-          ALPACA_SECRET_KEY
-        ),
-
-      streamStatus:
-        alpacaStreamStatus,
-
-      historySeeded:
-        historySeeded,
-
-      completedCandleCount:
-        completedCandles.length
+      events:
+        trendEventHistory
 
     });
 
@@ -3888,1216 +4180,1714 @@ app.get(
 
 
 // ==================================================
-// HEALTH CHECK
+// API - OLIVER
 // ==================================================
 
 app.get(
-  "/health",
-  (req, res) => {
-
-    res.json({
-
-      status:
-        "healthy"
-
-    });
-
-  }
-);
-
-
-// ==================================================
-// NORMAL 2-MINUTE GOOGL BARS
-// ==================================================
-
-app.get(
-  "/googl",
-  async (req, res) => {
-
-    try {
-
-      if (
-        !ALPACA_API_KEY ||
-        !ALPACA_SECRET_KEY
-      ) {
-
-        return res
-          .status(500)
-          .json({
-
-            error:
-              "Alpaca API credentials are not configured"
-
-          });
-
-      }
-
-
-      const url =
-        "https://data.alpaca.markets/v2/stocks/GOOGL/bars?timeframe=2Min&limit=10&feed=iex";
-
-
-      const response =
-        await fetch(
-          url,
-          {
-
-            headers: {
-
-              "APCA-API-KEY-ID":
-                ALPACA_API_KEY,
-
-              "APCA-API-SECRET-KEY":
-                ALPACA_SECRET_KEY
-
-            }
-
-          }
-        );
-
-
-      const text =
-        await response.text();
-
-
-      console.log(
-        "Alpaca status:",
-        response.status
-      );
-
-
-      if (!response.ok) {
-
-        return res
-          .status(
-            response.status
-          )
-          .send(text);
-
-      }
-
-
-      res
-        .type(
-          "application/json"
-        )
-        .send(text);
-
-
-    } catch (error) {
-
-      console.error(
-        "Alpaca error:",
-        error
-      );
-
-
-      res
-        .status(500)
-        .json({
-
-          error:
-            "Unable to retrieve GOOGL data"
-
-        });
-
-    }
-
-  }
-);
-
-
-// ==================================================
-// HEIKIN-ASHI 2-MINUTE DATA
-// ==================================================
-
-app.get(
-  "/googl-ha",
-  async (req, res) => {
-
-    try {
-
-      if (
-        !ALPACA_API_KEY ||
-        !ALPACA_SECRET_KEY
-      ) {
-
-        return res
-          .status(500)
-          .json({
-
-            error:
-              "Alpaca API credentials are not configured"
-
-          });
-
-      }
-
-
-      const url =
-        "https://data.alpaca.markets/v2/stocks/GOOGL/bars?timeframe=2Min&limit=200&feed=iex";
-
-
-      const response =
-        await fetch(
-          url,
-          {
-
-            headers: {
-
-              "APCA-API-KEY-ID":
-                ALPACA_API_KEY,
-
-              "APCA-API-SECRET-KEY":
-                ALPACA_SECRET_KEY
-
-            }
-
-          }
-        );
-
-
-      const data =
-        await response.json();
-
-
-      if (!response.ok) {
-
-        return res
-          .status(
-            response.status
-          )
-          .json(data);
-
-      }
-
-
-      const bars =
-        data.bars || [];
-
-
-      let previousHAOpen =
-        null;
-
-      let previousHAClose =
-        null;
-
-
-      const heikinAshi =
-        bars.map(
-          (bar, index) => {
-
-            const haClose =
-              (
-                bar.o +
-                bar.h +
-                bar.l +
-                bar.c
-              ) / 4;
-
-
-            let haOpen;
-
-
-            if (
-              index === 0
-            ) {
-
-              haOpen =
-                (
-                  bar.o +
-                  bar.c
-                ) / 2;
-
-            } else {
-
-              haOpen =
-                (
-                  previousHAOpen +
-                  previousHAClose
-                ) / 2;
-
-            }
-
-
-            const haHigh =
-              Math.max(
-                bar.h,
-                haOpen,
-                haClose
-              );
-
-
-            const haLow =
-              Math.min(
-                bar.l,
-                haOpen,
-                haClose
-              );
-
-
-            previousHAOpen =
-              haOpen;
-
-            previousHAClose =
-              haClose;
-
-
-            return {
-
-              time:
-                bar.t,
-
-              open:
-                Number(
-                  haOpen.toFixed(4)
-                ),
-
-              high:
-                Number(
-                  haHigh.toFixed(4)
-                ),
-
-              low:
-                Number(
-                  haLow.toFixed(4)
-                ),
-
-              close:
-                Number(
-                  haClose.toFixed(4)
-                ),
-
-              color:
-                haClose >= haOpen
-                  ? "GREEN"
-                  : "RED"
-
-            };
-
-          }
-        );
-
-
-      res.json({
-
-        symbol:
-          "GOOGL",
-
-        timeframe:
-          "2Min",
-
-        candles:
-          heikinAshi
-
-      });
-
-
-    } catch (error) {
-
-      console.error(
-        "Heikin-Ashi error:",
-        error
-      );
-
-
-      res
-        .status(500)
-        .json({
-
-          error:
-            "Unable to calculate Heikin-Ashi data"
-
-        });
-
-    }
-
-  }
-);
-
-
-// ==================================================
-// OLIVER LIVE ANALYSIS ENDPOINT
-// ==================================================
-
-app.get(
-  "/oliver",
-  (req, res) => {
-
-    try {
-
-      // Oliver uses COMPLETED candles only.
-      // The developing candle is deliberately excluded
-      // so an unfinished 2-minute candle cannot create
-      // a false confirmed setup.
-
-      const analysis =
-        analyzeOliver(
-          completedCandles
-        );
-
-
-      res.json({
-
-        symbol:
-          "GOOGL",
-
-        timeframe:
-          "2Min",
-
-        agent:
-          "Oliver",
-
-        engine:
-          "Oliver Engine V1",
-
-        streamStatus:
-          alpacaStreamStatus,
-
-        historySeeded:
-          historySeeded,
-
-        completedCandleCount:
-          completedCandles.length,
-
-        latestTrade:
-          latestGOOGLTrade,
-
-        analysis:
-          analysis
-
-      });
-
-
-    } catch (error) {
-
-      console.error(
-        "Oliver analysis error:",
-        error
-      );
-
-
-      res
-        .status(500)
-        .json({
-
-          error:
-            "Unable to run Oliver analysis",
-
-          message:
-            error.message
-
-        });
-
-    }
-
-  }
-);
-
-
-// ==================================================
-// OLIVER LIVE DASHBOARD
-// ==================================================
-
-app.get(
-  "/oliver-dashboard",
+  "/api/oliver",
   (req, res) => {
 
     const analysis =
-      analyzeOliver(
-        completedCandles
-      );
+      getCurrentAnalysis();
 
 
-    const action =
-      analysis.action ||
-      "WAIT";
+    res.json({
+
+      symbol:
+        "GOOGL",
+
+      oliver:
+        analysis.oliver ||
+        null,
+
+      establishedTrend:
+        analysis.establishedTrend,
+
+      currentPressure:
+        analysis.pressureDirection,
+
+      management:
+        analysis.management,
+
+      entryStatus:
+        analysis.entryStatus
+
+    });
+
+  }
+);
 
 
-    let actionClass =
-      "wait";
+// ==================================================
+// DASHBOARD
+// ==================================================
+
+app.get(
+  "/googl-live",
+  (req, res) => {
+
+    res.type("html");
 
 
-    let actionText =
-      "WAIT";
-
-
-    if (
-      action ===
-        "CALL_SETUP"
-    ) {
-
-      actionClass =
-        "call";
-
-      actionText =
-        "CALL SETUP";
-
-    }
-
-
-    if (
-      action ===
-        "PUT_SETUP"
-    ) {
-
-      actionClass =
-        "put";
-
-      actionText =
-        "PUT SETUP";
-
-    }
-
-
-    const arrow =
-      (direction) => {
-
-        if (
-          direction ===
-            "RISING"
-        ) {
-
-          return "↑";
-
-        }
-
-
-        if (
-          direction ===
-            "FALLING"
-        ) {
-
-          return "↓";
-
-        }
-
-
-        if (
-          direction ===
-            "FLAT"
-        ) {
-
-          return "→";
-
-        }
-
-
-        return "";
-
-      };
-
-
-    const money =
-      (value) => {
-
-        if (
-          value === null ||
-          value === undefined ||
-          !Number.isFinite(
-            Number(value)
-          )
-        ) {
-
-          return "—";
-
-        }
-
-
-        return (
-          "$" +
-          Number(value)
-            .toFixed(2)
-        );
-
-      };
-
-
-const battle = analyzeTrendBattle(completedCandles);
-
-const ropePosition = Number(battle.ropePosition || 0);
-const ropePercent = Math.max(0, Math.min(100, 50 + ropePosition / 2));
-const tugShift = ropePosition * 0.7;
-
-const battleControl = battle.control || "NEUTRAL";
-const battlePressure = battle.pressure || "WAITING";
-
-const tugIntensity =
-  battlePressure === "CONFIRMED" ? "tug-confirmed" :
-  battlePressure === "BUILDING" ? "tug-building" :
-  battlePressure === "EARLY" ? "tug-early" :
-  "tug-waiting";
-
-const battlePhase = battle.phase || "WAIT";
-const battleAction = battle.action || "WAIT";   
-
-const entryCrossed = 
-  battle.entryMarker?.crossed || "NONE";
-
-const marketSession =
-  battle.marketSession?.session || "UNKNOWN";
-
-const regularHours =
-  battle.marketSession?.regularHours ?? false;
-
-const html = `
+    res.send(`
 <!DOCTYPE html>
+
 <html>
+
 <head>
 
 <meta
   name="viewport"
-  content="width=device-width, initial-scale=1.0"
+  content="width=device-width, initial-scale=1"
 />
 
-<title>BVB V2 — Trend Battle</title>
+<title>
+BVB GOOGL Live
+</title>
+
 
 <style>
 
 * {
-  box-sizing: border-box;
+  box-sizing:
+    border-box;
 }
 
-html, body {
+
+body {
+
   margin: 0;
-  width: 100%;
-  min-height: 100%;
-  background: #080c12;
-  color: #ffffff;
+
+  padding:
+    18px;
+
+  background:
+    #0b0f14;
+
+  color:
+    #f5f7fa;
+
   font-family:
     -apple-system,
     BlinkMacSystemFont,
     "Segoe UI",
     sans-serif;
+
 }
 
-body {
-  padding: 18px;
+
+.container {
+
+  max-width:
+    900px;
+
+  margin:
+    0 auto;
+
 }
 
-.dashboard {
-  width: 100%;
-  max-width: 1100px;
-  margin: auto;
-}
 
 .header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 14px;
+
+  display:
+    flex;
+
+  justify-content:
+    space-between;
+
+  align-items:
+    flex-start;
+
+  gap:
+    16px;
+
+  flex-wrap:
+    wrap;
+
+  margin-bottom:
+    18px;
+
 }
+
 
 .title {
-  font-size: 14px;
-  letter-spacing: 2px;
-  color: #8995a7;
+
+  font-size:
+    25px;
+
+  font-weight:
+    800;
+
 }
 
-.price {
-  font-size: 28px;
-  font-weight: 800;
+
+.subtitle {
+
+  color:
+    #9aa4b2;
+
+  margin-top:
+    4px;
+
 }
 
-.session {
-  font-size: 12px;
-  color: #9ba7b8;
-  text-align: right;
-}
 
-/* -------------------------
-   BATTLE STATUS
-------------------------- */
+.market-box {
 
-.status {
-  text-align: center;
-  margin-bottom: 14px;
-}
+  text-align:
+    right;
 
-.control {
-  font-size: clamp(26px, 5vw, 48px);
-  font-weight: 900;
-}
+  padding:
+    10px 14px;
 
-.pressure {
-  margin-top: 4px;
-  color: #aeb8c6;
-  font-size: 15px;
-}
+  border:
+    1px solid #29313c;
 
-/* -------------------------
-   TUG OF WAR
-------------------------- */
+  border-radius:
+    12px;
 
-.arena {
-  background: #111720;
-  border: 1px solid #27303d;
-  border-radius: 20px;
-  padding: 20px;
-}
-
-.teams {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-weight: 900;
-  font-size: clamp(18px, 3vw, 28px);
-}
-
-.bears {
-  color: #ff5b67;
-}
-
-.bulls {
-  color: #55e69a;
-}
-
-.ropeArea {
-  position: relative;
-  height: 110px;
-  margin-top: 5px;
-}
-
-.rope {
-  position: absolute;
-  left: 5%;
-  right: 5%;
-  top: 52px;
-  height: 10px;
-  border-radius: 10px;
   background:
-    repeating-linear-gradient(
-      45deg,
-      #9b7653,
-      #9b7653 8px,
-      #c69a6b 8px,
-      #c69a6b 16px
-    );
+    #121820;
+
+  min-width:
+    180px;
+
 }
 
-/* CENTER */
 
-.centerLine {
-  position: absolute;
-  left: 50%;
-  top: 22px;
-  height: 70px;
-  width: 2px;
-  background: #7c8796;
+#clock {
+
+  font-size:
+    21px;
+
+  font-weight:
+    800;
+
 }
 
-.centerLabel {
-  position: absolute;
-  left: 50%;
-  top: 0;
-  transform: translateX(-50%);
-  color: #7f8a99;
-  font-size: 11px;
+
+#clockDate {
+
+  color:
+    #9aa4b2;
+
+  font-size:
+    13px;
+
+  margin-top:
+    2px;
+
 }
 
-/* ENTRY MARKERS */
 
-.bearEntry {
-  position: absolute;
-  left: 32.5%;
-  top: 28px;
-  height: 60px;
-  width: 2px;
-  background: #ff5b67;
+#marketStatus {
+
+  margin-top:
+    7px;
+
+  font-weight:
+    800;
+
 }
 
-.bullEntry {
-  position: absolute;
-  left: 67.5%;
-  top: 28px;
-  height: 60px;
-  width: 2px;
-  background: #55e69a;
+
+.market-open {
+
+  color:
+    #4ade80;
+
 }
 
-.entryText {
-  position: absolute;
-  top: 90px;
-  transform: translateX(-50%);
-  font-size: 10px;
-  white-space: nowrap;
+
+.market-closed {
+
+  color:
+    #f87171;
+
 }
 
-.bearText {
-  left: 32.5%;
-  color: #ff7b84;
-}
-
-.bullText {
-  left: 67.5%;
-  color: #6bf0a9;
-}
-
-/* KNOT */
-
-.knot {
-  position: absolute;
-  left: ${ropePercent}%;
-  top: 38px;
-
-  width: 38px;
-  height: 38px;
-
-  transform: translateX(-50%);
-
-  border-radius: 50%;
-
-  background: #f3c969;
-  border: 5px solid #ffffff;
-
-  box-shadow:
-    0 0 12px rgba(255,255,255,.35);
-
-  transition:
-    left 0.8s ease;
-}
-
-/* -------------------------
-   ACTION
-------------------------- */
-
-.actionBox {
-  margin-top: 14px;
-  text-align: center;
-
-  padding: 13px;
-
-  border-radius: 12px;
-
-  background: #171e28;
-  border: 1px solid #2c3644;
-}
-
-.action {
-  font-size: clamp(20px, 4vw, 32px);
-  font-weight: 900;
-}
-
-.phase {
-  margin-top: 4px;
-  font-size: 13px;
-  color: #9ca7b6;
-}
-
-/* -------------------------
-   INFO CARDS
-------------------------- */
-
-.cards {
-  display: grid;
-  grid-template-columns:
-    repeat(4, 1fr);
-
-  gap: 10px;
-  margin-top: 12px;
-}
 
 .card {
-  background: #111720;
-  border: 1px solid #27303d;
-  border-radius: 12px;
-  padding: 11px;
+
+  background:
+    #121820;
+
+  border:
+    1px solid #29313c;
+
+  border-radius:
+    14px;
+
+  padding:
+    16px;
+
+  margin-bottom:
+    14px;
+
 }
 
-.label {
-  font-size: 10px;
-  letter-spacing: 1px;
-  color: #7f8a99;
+
+.card-title {
+
+  color:
+    #9aa4b2;
+
+  font-size:
+    12px;
+
+  font-weight:
+    800;
+
+  letter-spacing:
+    0.7px;
+
+  text-transform:
+    uppercase;
+
+  margin-bottom:
+    8px;
+
 }
 
-.value {
-  margin-top: 4px;
-  font-size: 15px;
-  font-weight: 800;
+
+.big {
+
+  font-size:
+    28px;
+
+  font-weight:
+    850;
+
 }
 
-/* -------------------------
-   WARNING
-------------------------- */
+
+.medium {
+
+  font-size:
+    19px;
+
+  font-weight:
+    750;
+
+}
+
+
+.grid {
+
+  display:
+    grid;
+
+  grid-template-columns:
+    repeat(
+      2,
+      minmax(0, 1fr)
+    );
+
+  gap:
+    12px;
+
+}
+
+
+.metric {
+
+  background:
+    #0d131a;
+
+  border-radius:
+    10px;
+
+  padding:
+    11px;
+
+}
+
+
+.metric-label {
+
+  color:
+    #8994a3;
+
+  font-size:
+    11px;
+
+  font-weight:
+    750;
+
+  text-transform:
+    uppercase;
+
+}
+
+
+.metric-value {
+
+  margin-top:
+    5px;
+
+  font-size:
+    17px;
+
+  font-weight:
+    800;
+
+  overflow-wrap:
+    anywhere;
+
+}
+
+
+.bull {
+
+  color:
+    #4ade80;
+
+}
+
+
+.bear {
+
+  color:
+    #f87171;
+
+}
+
+
+.neutral {
+
+  color:
+    #facc15;
+
+}
+
 
 .warning {
-  margin-top: 12px;
-  text-align: center;
 
-  padding: 10px;
+  color:
+    #fb923c;
 
-  border-radius: 10px;
-
-  background: #171e28;
-
-  font-size: 13px;
 }
 
-/* -------------------------
-   MOBILE / PORTRAIT
-------------------------- */
 
-@media (max-width: 700px) {
+.status-line {
+
+  margin-top:
+    8px;
+
+  color:
+    #aeb7c4;
+
+  line-height:
+    1.4;
+
+}
+
+
+#management {
+
+  margin-top:
+    8px;
+
+  font-size:
+    20px;
+
+  font-weight:
+    850;
+
+}
+
+
+.small {
+
+  font-size:
+    12px;
+
+  color:
+    #8994a3;
+
+}
+
+
+@media (
+  max-width: 620px
+) {
 
   body {
-    padding: 10px;
+
+    padding:
+      10px;
+
   }
 
-  .arena {
-    padding: 14px 10px;
-  }
 
-  .cards {
+  .grid {
+
     grid-template-columns:
-      repeat(2, 1fr);
+      1fr;
+
   }
 
-  .ropeArea {
-    height: 105px;
-  }
-}
 
-/* -------------------------
-   LANDSCAPE
-------------------------- */
+  .market-box {
 
-@media (orientation: landscape)
-and (max-height: 700px) {
+    text-align:
+      left;
 
-  body {
-    padding: 8px 16px;
+    width:
+      100%;
+
   }
 
-  .header {
-    margin-bottom: 5px;
-  }
-
-  .status {
-    margin-bottom: 5px;
-  }
-
-  .arena {
-    padding: 10px 18px;
-  }
-
-  .ropeArea {
-    height: 100px;
-  }
-
-  .actionBox {
-    margin-top: 6px;
-    padding: 7px;
-  }
-
-  .cards {
-    margin-top: 6px;
-  }
-
-  .warning {
-    margin-top: 6px;
-    padding: 6px;
-  }
-}
-
-/* =========================================
-   ANIMATED BULL vs BEAR TUG-OF-WAR
-   ========================================= */
-
-.tug-character {
-  position: absolute;
-  bottom: 28px;
-  width: 150px;
-  height: auto;
-  z-index: 5;
-  filter: drop-shadow(0 8px 10px rgba(0,0,0,.45));
-}
-
-.tug-bear {
-  left: 20px;
-  animation: bearPull 1.4s ease-in-out infinite;
-}
-
-.tug-bull {
-  right: 20px;
-  animation: bullPull 1.4s ease-in-out infinite;
-}
-/* Tug-of-war intensity */
-
-.tug-waiting .tug-bear,
-.tug-waiting .tug-bull {
-  animation-duration: 2.4s;
-  opacity: 0.75;
-}
-
-.tug-early .tug-bear,
-.tug-early .tug-bull {
-  animation-duration: 1.8s;
-  opacity: 0.9;
-}
-
-.tug-building .tug-bear,
-.tug-building .tug-bull {
-  animation-duration: 1.1s;
-  opacity: 1;
-}
-
-.tug-confirmed .tug-bear,
-.tug-confirmed .tug-bull {
-  animation-duration: 0.65s;
-  opacity: 1;
-}
-
-/* Rope reacts to battle intensity */
-
-.tug-waiting .rope {
-  opacity: 0.65;
-}
-
-.tug-early .rope {
-  opacity: 0.8;
-}
-
-.tug-building .rope {
-  opacity: 0.95;
-}
-
-.tug-confirmed .rope {
-  opacity: 1;
-  filter: brightness(1.18);
-}
-@keyframes bearPull {
-  0%, 100% {
-    transform: translateX(0) rotate(0deg);
-  }
-  50% {
-    transform: translateX(-7px) rotate(-2deg);
-  }
-}
-
-@keyframes bullPull {
-  0%, 100% {
-    transform: translateX(0) rotate(0deg);
-  }
-  50% {
-    transform: translateX(7px) rotate(2deg);
-  }
 }
 
 </style>
+
 </head>
+
 
 <body>
 
-<div class="dashboard">
+<div class="container">
+
 
   <div class="header">
 
     <div>
+
       <div class="title">
-        BVB V2 — LIVE TREND BATTLE
+        BVB LIVE TREND BATTLE
       </div>
 
-      <div class="price">
-        GOOGL $${Number(battle.price || 0).toFixed(2)}
+      <div class="subtitle">
+        GOOGL · 2-Minute Live Monitor
       </div>
+
     </div>
 
-    <div class="session">
-      ${marketSession}<br>
-      ${regularHours ? "LIVE MARKET" : "MARKET CLOSED"}
+
+    <div class="market-box">
+
+      <div id="clock">
+        --:--:--
+      </div>
+
+      <div id="clockDate">
+        Central Time
+      </div>
+
+      <div
+        id="marketStatus"
+        class="market-closed"
+      >
+        MARKET --
+      </div>
+
     </div>
 
   </div>
 
 
-  <div class="status">
+  <div class="card">
 
-    <div class="control">
-      ${
-        battleControl === "BULLS"
-          ? "BULLS IN CONTROL"
-          : battleControl === "BEARS"
-          ? "BEARS IN CONTROL"
-          : "⚖️ BATTLE NEUTRAL"
-      }
+    <div class="card-title">
+      GOOGL
     </div>
 
-    <div class="pressure">
-      ${battlePressure}
+    <div
+      id="price"
+      class="big"
+    >
+      $---.--
+    </div>
+
+    <div
+      id="streamStatus"
+      class="small"
+    >
+      Stream: --
     </div>
 
   </div>
 
 
-  <div class="arena">
+  <div class="card">
 
-    <div class="teams">
-
-      <div class="bears">
-         BEARS
-      </div>
-
-      <div class="bulls">
-         BULLS 
-      </div>
-
+    <div class="card-title">
+      Established Trend
     </div>
 
+    <div
+      id="establishedTrend"
+      class="big neutral"
+    >
+      NEUTRAL
+    </div>
 
-    <div class="ropeArea ${tugIntensity}" style="transform: translateX(${tugShift}px);">
-    <img src="/BEARS.PNG" class="tug-character tug-bear" alt="Bear">
+    <div
+      id="management"
+      class="neutral"
+    >
+      WAIT
+    </div>
 
-    <img src="/BULLS.PNG" class="tug-character tug-bull" alt="Bull">
-    
-      <div class="centerLabel">
+    <div
+      id="reversalMessage"
+      class="status-line"
+    >
+      No reversal warning.
+    </div>
+
+  </div>
+
+
+  <div class="grid">
+
+    <div class="card">
+
+      <div class="card-title">
+        Current Pressure
+      </div>
+
+      <div
+        id="pressure"
+        class="medium neutral"
+      >
         NEUTRAL
       </div>
 
-      <div class="rope"></div>
+    </div>
 
-      <div class="centerLine"></div>
 
-      <div class="bearEntry"></div>
+    <div class="card">
 
-      <div class="bullEntry"></div>
-
-      <div class="entryText bearText">
-        PUT ENTRY ZONE
+      <div class="card-title">
+        Entry Status
       </div>
 
-      <div class="entryText bullText">
-        CALL ENTRY ZONE
+      <div
+        id="entryStatus"
+        class="medium neutral"
+      >
+        WAIT
       </div>
 
-      <div class="knot"></div>
+    </div>
+
+  </div>
+    <div class="grid">
+
+    <div class="card">
+
+      <div class="card-title">
+        Battle State
+      </div>
+
+      <div
+        id="battleState"
+        class="medium neutral"
+      >
+        BATTLE_NEUTRAL
+      </div>
+
+    </div>
+
+
+    <div class="card">
+
+      <div class="card-title">
+        Pressure Strength
+      </div>
+
+      <div
+        id="strength"
+        class="medium neutral"
+      >
+        NEUTRAL
+      </div>
 
     </div>
 
   </div>
 
 
-  <div class="actionBox">
+  <div class="grid">
 
-    <div class="action">
-      ${
-        entryCrossed === "BULL_ENTRY"
-          ? "🔔 CALL ENTRY"
-          : entryCrossed === "BEAR_ENTRY"
-          ? "🔔 PUT ENTRY"
-          : battleAction
-      }
+    <div class="card">
+
+      <div class="card-title">
+        Bull Score
+      </div>
+
+      <div
+        id="bullScore"
+        class="big bull"
+      >
+        0
+      </div>
+
     </div>
 
-    <div class="phase">
-      ${battlePhase}
+
+    <div class="card">
+
+      <div class="card-title">
+        Bear Score
+      </div>
+
+      <div
+        id="bearScore"
+        class="big bear"
+      >
+        0
+      </div>
+
     </div>
 
   </div>
 
 
-  <div class="cards">
+  <div class="card">
 
-    <div class="card">
-      <div class="label">
-        CONTROL
-      </div>
-      <div class="value">
-        ${battleControl}
-      </div>
+    <div class="card-title">
+      Heikin-Ashi
     </div>
 
 
-    <div class="card">
-      <div class="label">
-        PRESSURE
+    <div class="grid">
+
+      <div class="metric">
+
+        <div class="metric-label">
+          Current HA
+        </div>
+
+        <div
+          id="haCurrent"
+          class="metric-value"
+        >
+          --
+        </div>
+
       </div>
-      <div class="value">
-        ${battlePressure}
-      </div>
-    </div>
 
 
-    <div class="card">
-      <div class="label">
-        HEIKIN-ASHI
-      </div>
-      <div class="value">
-        ${battle.haControl || "WAIT"}
-      </div>
-    </div>
+      <div class="metric">
 
+        <div class="metric-label">
+          HA Run
+        </div>
 
-    <div class="card">
-      <div class="label">
-        HA RUN
+        <div
+          id="haRun"
+          class="metric-value"
+        >
+          --
+        </div>
+
       </div>
-      <div class="value">
-        ${battle.haRunColor || "NONE"}
-        ${battle.haRunLength || 0}
-      </div>
+
     </div>
 
   </div>
 
 
-  <div class="warning">
+  <div class="card">
 
-    ${
-      !regularHours
+    <div class="card-title">
+      Agent Oliver
+    </div>
 
-        ? "🌙 Market closed — analysis is informational until regular trading resumes."
 
-        : battlePhase === "WARNING"
+    <div class="grid">
 
-        ? "🔔 Direction-change conditions developing."
+      <div class="metric">
 
-        : entryCrossed !== "NONE"
+        <div class="metric-label">
+          Market State
+        </div>
 
-        ? "🎯 Tug-of-war entry threshold crossed."
+        <div
+          id="oliverState"
+          class="metric-value"
+        >
+          --
+        </div>
 
-        : "Monitoring the battle for a change in control."
-    }
+      </div>
+
+
+      <div class="metric">
+
+        <div class="metric-label">
+          Structure
+        </div>
+
+        <div
+          id="structure"
+          class="metric-value"
+        >
+          --
+        </div>
+
+      </div>
+
+
+      <div class="metric">
+
+        <div class="metric-label">
+          8 SMA
+        </div>
+
+        <div
+          id="sma8"
+          class="metric-value"
+        >
+          --
+        </div>
+
+      </div>
+
+
+      <div class="metric">
+
+        <div class="metric-label">
+          20 SMA
+        </div>
+
+        <div
+          id="sma20"
+          class="metric-value"
+        >
+          --
+        </div>
+
+      </div>
+
+
+      <div class="metric">
+
+        <div class="metric-label">
+          200 SMA
+        </div>
+
+        <div
+          id="sma200"
+          class="metric-value"
+        >
+          --
+        </div>
+
+      </div>
+
+
+      <div class="metric">
+
+        <div class="metric-label">
+          200 SMA Context
+        </div>
+
+        <div
+          id="sma200Context"
+          class="metric-value"
+        >
+          --
+        </div>
+
+      </div>
+
+    </div>
 
   </div>
+
+
+  <div class="card">
+
+    <div class="card-title">
+      Trend Memory
+    </div>
+
+
+    <div class="grid">
+
+      <div class="metric">
+
+        <div class="metric-label">
+          Opposite Confirmations
+        </div>
+
+        <div
+          id="oppositeConfirmations"
+          class="metric-value"
+        >
+          0 / 2
+        </div>
+
+      </div>
+
+
+      <div class="metric">
+
+        <div class="metric-label">
+          Completed Candles
+        </div>
+
+        <div
+          id="completedCandles"
+          class="metric-value"
+        >
+          0
+        </div>
+
+      </div>
+
+    </div>
+
+  </div>
+
 
 </div>
 
 
 <script>
 
-setTimeout(
-  () => {
-    window.location.reload();
-  },
-  10000
+// ==================================================
+// DASHBOARD HELPERS
+// ==================================================
+
+function money(
+  value
+) {
+
+  const number =
+    Number(value);
+
+
+  if (
+    !Number.isFinite(number)
+  ) {
+
+    return "--";
+  }
+
+
+  return (
+    "$" +
+    number.toFixed(2)
+  );
+
+}
+
+
+function setDirectionClass(
+  element,
+  direction
+) {
+
+  if (!element) {
+    return;
+  }
+
+
+  element.classList.remove(
+    "bull",
+    "bear",
+    "neutral",
+    "warning"
+  );
+
+
+  if (
+    direction === "BULL" ||
+    direction === "BULLISH" ||
+    direction === "GREEN"
+  ) {
+
+    element.classList.add(
+      "bull"
+    );
+
+    return;
+  }
+
+
+  if (
+    direction === "BEAR" ||
+    direction === "BEARISH" ||
+    direction === "RED"
+  ) {
+
+    element.classList.add(
+      "bear"
+    );
+
+    return;
+  }
+
+
+  element.classList.add(
+    "neutral"
+  );
+
+}
+
+
+// ==================================================
+// CLIENT-SIDE CLOCK
+// Updates every second without waiting for API refresh.
+// ==================================================
+
+function updateLocalClock() {
+
+  const now =
+    new Date();
+
+
+  const time =
+    new Intl.DateTimeFormat(
+      "en-US",
+      {
+
+        timeZone:
+          "America/Chicago",
+
+        hour:
+          "numeric",
+
+        minute:
+          "2-digit",
+
+        second:
+          "2-digit",
+
+        hour12:
+          true
+
+      }
+    ).format(now);
+
+
+  const date =
+    new Intl.DateTimeFormat(
+      "en-US",
+      {
+
+        timeZone:
+          "America/Chicago",
+
+        weekday:
+          "short",
+
+        month:
+          "short",
+
+        day:
+          "numeric"
+
+      }
+    ).format(now);
+
+
+  document.getElementById(
+    "clock"
+  ).textContent =
+    time;
+
+
+  document.getElementById(
+    "clockDate"
+  ).textContent =
+    date + " · CT";
+
+}
+
+
+updateLocalClock();
+
+
+setInterval(
+  updateLocalClock,
+  1000
+);
+
+
+// ==================================================
+// LIVE DASHBOARD REFRESH
+// ==================================================
+
+async function refreshDashboard() {
+
+  try {
+
+    const response =
+      await fetch(
+        "/api/googl-live",
+        {
+          cache:
+            "no-store"
+        }
+      );
+
+
+    if (!response.ok) {
+
+      throw new Error(
+        "Live API returned " +
+        response.status
+      );
+    }
+
+
+    const data =
+      await response.json();
+
+
+    const analysis =
+      data.analysis || {};
+
+
+    const oliver =
+      analysis.oliver || {};
+
+
+    const market =
+      data.market || {};
+
+
+    // ----------------------------------------------
+    // PRICE
+    // ----------------------------------------------
+
+    const livePrice =
+      data.latestTrade?.price ??
+      data.developingCandle?.close ??
+      analysis.price;
+
+
+    document.getElementById(
+      "price"
+    ).textContent =
+      money(
+        livePrice
+      );
+
+
+    document.getElementById(
+      "streamStatus"
+    ).textContent =
+      "Stream: " +
+      (
+        data.streamStatus ||
+        "--"
+      );
+
+
+    // ----------------------------------------------
+    // MARKET STATUS
+    // ----------------------------------------------
+
+    const marketElement =
+      document.getElementById(
+        "marketStatus"
+      );
+
+
+    marketElement.textContent =
+      "MARKET " +
+      (
+        market.status ||
+        "--"
+      );
+
+
+    marketElement.classList.remove(
+      "market-open",
+      "market-closed"
+    );
+
+
+    marketElement.classList.add(
+      market.isOpen
+        ? "market-open"
+        : "market-closed"
+    );
+
+
+    // ----------------------------------------------
+    // ESTABLISHED TREND
+    // ----------------------------------------------
+
+    const establishedTrend =
+      analysis.establishedTrend ||
+      "NEUTRAL";
+
+
+    const trendElement =
+      document.getElementById(
+        "establishedTrend"
+      );
+
+
+    trendElement.textContent =
+      establishedTrend;
+
+
+    setDirectionClass(
+      trendElement,
+      establishedTrend
+    );
+
+
+    // ----------------------------------------------
+    // MANAGEMENT
+    // ----------------------------------------------
+
+    const management =
+      analysis.management ||
+      "WAIT";
+
+
+    const managementElement =
+      document.getElementById(
+        "management"
+      );
+
+
+    managementElement.textContent =
+      management;
+
+
+    managementElement.classList.remove(
+      "bull",
+      "bear",
+      "neutral",
+      "warning"
+    );
+
+
+    if (
+      management.includes(
+        "CALL"
+      )
+    ) {
+
+      managementElement.classList.add(
+        "bull"
+      );
+
+    } else if (
+      management.includes(
+        "PUT"
+      )
+    ) {
+
+      managementElement.classList.add(
+        "bear"
+      );
+
+    } else {
+
+      managementElement.classList.add(
+        "neutral"
+      );
+    }
+
+
+    // ----------------------------------------------
+    // REVERSAL WATCH
+    // ----------------------------------------------
+
+    const reversalElement =
+      document.getElementById(
+        "reversalMessage"
+      );
+
+
+    if (
+      analysis.reversalWatch
+    ) {
+
+      reversalElement.textContent =
+        "REVERSAL WATCH — opposite pressure is developing. Trend has NOT flipped yet.";
+
+      reversalElement.classList.add(
+        "warning"
+      );
+
+    } else {
+
+      reversalElement.textContent =
+        "No confirmed reversal. Follow established trend management.";
+
+      reversalElement.classList.remove(
+        "warning"
+      );
+    } 
+
+
+  return [
+    date.getUTCFullYear(),
+    String(
+      date.getUTCMonth() + 1
+    ).padStart(2, "0"),
+    String(
+      date.getUTCDate()
+    ).padStart(2, "0")
+  ].join("-");
+
+} 
+    // ----------------------------------------------
+    // CURRENT PRESSURE
+    // ----------------------------------------------
+
+    const pressure =
+      analysis.pressureDirection ||
+      "NEUTRAL";
+
+
+    const pressureElement =
+      document.getElementById(
+        "pressure"
+      );
+
+
+    pressureElement.textContent =
+      pressure;
+
+
+    setDirectionClass(
+      pressureElement,
+      pressure
+    );
+
+
+    // ----------------------------------------------
+    // ENTRY STATUS
+    // ----------------------------------------------
+
+    const entryStatus =
+      analysis.entryStatus ||
+      "WAIT";
+
+
+    const entryElement =
+      document.getElementById(
+        "entryStatus"
+      );
+
+
+    entryElement.textContent =
+      entryStatus;
+
+
+    if (
+      entryStatus.includes(
+        "CALL"
+      ) ||
+      entryStatus.includes(
+        "BULL"
+      )
+    ) {
+
+      setDirectionClass(
+        entryElement,
+        "BULL"
+      );
+
+    } else if (
+      entryStatus.includes(
+        "PUT"
+      ) ||
+      entryStatus.includes(
+        "BEAR"
+      )
+    ) {
+
+      setDirectionClass(
+        entryElement,
+        "BEAR"
+      );
+
+    } else {
+
+      setDirectionClass(
+        entryElement,
+        "NEUTRAL"
+      );
+    }
+
+
+    // ----------------------------------------------
+    // BATTLE STATE
+    // ----------------------------------------------
+
+    const battleState =
+      analysis.battleState ||
+      "BATTLE_NEUTRAL";
+
+
+    const battleElement =
+      document.getElementById(
+        "battleState"
+      );
+
+
+    battleElement.textContent =
+      battleState;
+
+
+    if (
+      battleState.includes(
+        "BULL"
+      )
+    ) {
+
+      setDirectionClass(
+        battleElement,
+        "BULL"
+      );
+
+    } else if (
+      battleState.includes(
+        "BEAR"
+      )
+    ) {
+
+      setDirectionClass(
+        battleElement,
+        "BEAR"
+      );
+
+    } else {
+
+      setDirectionClass(
+        battleElement,
+        "NEUTRAL"
+      );
+    }
+
+
+    // ----------------------------------------------
+    // STRENGTH
+    // ----------------------------------------------
+
+    const strengthElement =
+      document.getElementById(
+        "strength"
+      );
+
+
+    strengthElement.textContent =
+      analysis.strength ||
+      "NEUTRAL";
+
+
+    setDirectionClass(
+      strengthElement,
+      pressure
+    );
+
+
+    // ----------------------------------------------
+    // SCORES
+    // ----------------------------------------------
+
+    document.getElementById(
+      "bullScore"
+    ).textContent =
+      analysis.bullScore ??
+      0;
+
+
+    document.getElementById(
+      "bearScore"
+    ).textContent =
+      analysis.bearScore ??
+      0;
+
+
+    // ----------------------------------------------
+    // HEIKIN-ASHI
+    // ----------------------------------------------
+
+    const haCurrent =
+      document.getElementById(
+        "haCurrent"
+      );
+
+
+    haCurrent.textContent =
+      (
+        analysis.haDirection ||
+        "--"
+      ) +
+      " · " +
+      (
+        analysis.haType ||
+        "--"
+      );
+
+
+    setDirectionClass(
+      haCurrent,
+      analysis.haDirection
+    );
+
+
+    const haRun =
+      document.getElementById(
+        "haRun"
+      );
+
+
+    haRun.textContent =
+      (
+        analysis.haRunDirection ||
+        "--"
+      ) +
+      " · " +
+      (
+        analysis.haRunCount ??
+        0
+      ) +
+      " candles · " +
+      (
+        analysis.haRunStrength ||
+        "--"
+      );
+
+
+    setDirectionClass(
+      haRun,
+      analysis.haRunDirection
+    );
+
+
+    // ----------------------------------------------
+    // OLIVER
+    // ----------------------------------------------
+
+    const oliverState =
+      document.getElementById(
+        "oliverState"
+      );
+
+
+    oliverState.textContent =
+      oliver.state ||
+      "--";
+
+
+    setDirectionClass(
+      oliverState,
+      oliver.state
+    );
+
+
+    document.getElementById(
+      "structure"
+    ).textContent =
+      oliver.structure ||
+      "--";
+
+
+    document.getElementById(
+      "sma8"
+    ).textContent =
+      money(
+        oliver.sma8
+      );
+
+
+    document.getElementById(
+      "sma20"
+    ).textContent =
+      money(
+        oliver.sma20
+      );
+
+
+    document.getElementById(
+      "sma200"
+    ).textContent =
+      money(
+        oliver.sma200
+      );
+
+
+    document.getElementById(
+      "sma200Context"
+    ).textContent =
+      oliver.sma200Context ||
+      "--";
+
+
+    // ----------------------------------------------
+    // TREND MEMORY
+    // ----------------------------------------------
+
+    document.getElementById(
+      "oppositeConfirmations"
+    ).textContent =
+      (
+        analysis.oppositeConfirmations ??
+        0
+      ) +
+      " / 2";
+
+
+    document.getElementById(
+      "completedCandles"
+    ).textContent =
+      data.completedCandleCount ??
+      0;
+
+
+  } catch (error) {
+
+    console.error(
+      "Dashboard refresh error:",
+      error
+    );
+
+
+    document.getElementById(
+      "streamStatus"
+    ).textContent =
+      "Dashboard connection error";
+
+  }
+
+}
+
+
+// Initial load
+
+refreshDashboard();
+
+
+// Refresh market/trading information
+// every 2 seconds. The clock itself updates
+// every second independently.
+
+setInterval(
+  refreshDashboard,
+  2000
 );
 
 </script>
 
 </body>
+
 </html>
-`;
-
-
-    res
-      .type("html")
-      .send(html);
+    `);
 
   }
 );
 
 
 // ==================================================
-// START SERVER
+// STARTUP
 // ==================================================
 
-app.listen(
-  PORT,
-  () => {
+async function startServer() {
 
-    console.log(
-      `BVB Trading Assistant running on port ${PORT}`
+  app.listen(
+    PORT,
+    () => {
+
+      console.log(
+        "BVB GOOGL scanner listening on port " +
+        PORT
+      );
+
+    }
+  );
+
+
+  await seedHistoricalCandles();
+
+
+  // Run an initial analysis after history
+  // has been loaded.
+
+  if (
+    completedCandles.length >=
+      21
+  ) {
+
+    const initialAnalysis =
+      analyzeTrendBattle(
+        completedCandles
+      );
+
+
+    recordTrendEvent(
+      initialAnalysis
+    );
+  }
+
+
+  connectAlpacaStream();
+
+}
+
+
+// ==================================================
+// GRACEFUL SHUTDOWN
+// ==================================================
+
+function shutdown() {
+
+  console.log(
+    "Shutting down BVB scanner..."
+  );
+
+
+  if (
+    reconnectTimer
+  ) {
+
+    clearTimeout(
+      reconnectTimer
     );
 
+    reconnectTimer =
+      null;
   }
+
+
+  if (
+    alpacaWS
+  ) {
+
+    try {
+
+      alpacaWS.close();
+
+    } catch (_) {}
+
+  }
+
+
+  process.exit(0);
+
+}
+
+
+process.on(
+  "SIGTERM",
+  shutdown
 );
+
+
+process.on(
+  "SIGINT",
+  shutdown
+);
+
+
+// ==================================================
+// START
+// ==================================================
+
+startServer();
