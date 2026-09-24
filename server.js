@@ -4938,7 +4938,7 @@ and (max-height: 700px) {
       </div>
 
       <div class="bulls">
-        BULLS 
+         BULLS 
       </div>
 
     </div>
