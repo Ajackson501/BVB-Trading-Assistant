@@ -4712,6 +4712,47 @@ and (max-height: 700px) {
   }
 }
 
+/* =========================================
+   ANIMATED BULL vs BEAR TUG-OF-WAR
+   ========================================= */
+
+.tug-character {
+  position: absolute;
+  bottom: 28px;
+  width: 150px;
+  height: auto;
+  z-index: 5;
+  filter: drop-shadow(0 8px 10px rgba(0,0,0,.45));
+}
+
+.tug-bear {
+  left: 20px;
+  animation: bearPull 1.4s ease-in-out infinite;
+}
+
+.tug-bull {
+  right: 20px;
+  animation: bullPull 1.4s ease-in-out infinite;
+}
+
+@keyframes bearPull {
+  0%, 100% {
+    transform: translateX(0) rotate(0deg);
+  }
+  50% {
+    transform: translateX(-7px) rotate(-2deg);
+  }
+}
+
+@keyframes bullPull {
+  0%, 100% {
+    transform: translateX(0) rotate(0deg);
+  }
+  50% {
+    transform: translateX(7px) rotate(2deg);
+  }
+}
+
 </style>
 </head>
 
@@ -4774,7 +4815,10 @@ and (max-height: 700px) {
 
 
     <div class="ropeArea">
+    <img src="/Bear.png.PNG" class="tug-character tug-bear" alt="Bear">
 
+    <img src="/Bull.png.PNG" class="tug-character tug-bull" alt="Bull">
+    
       <div class="centerLabel">
         NEUTRAL
       </div>
