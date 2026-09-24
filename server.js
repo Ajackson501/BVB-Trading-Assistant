@@ -3055,7 +3055,7 @@ const marketSession =
   ) {
 
     pressure =
-      "EARLY";
+    "EARLY";
 
   }
 
