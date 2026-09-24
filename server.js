@@ -4343,10 +4343,17 @@ const tugShift = ropePosition * 0.7;
 
 const battleControl = battle.control || "NEUTRAL";
 const battlePressure = battle.pressure || "WAITING";
-const battlePhase = battle.phase || "WAIT";
-const battleAction = battle.action || "WAIT";
 
-const entryCrossed =
+const tugIntensity =
+  battlePressure === "CONFIRMED" ? "tug-confirmed" :
+  battlePressure === "BUILDING" ? "tug-building" :
+  battlePressure === "EARLY" ? "tug-early" :
+  "tug-waiting";
+
+const battlePhase = battle.phase || "WAIT";
+const battleAction = battle.action || "WAIT";   
+
+const entryCrossed = 
   battle.entryMarker?.crossed || "NONE";
 
 const marketSession =
@@ -4806,11 +4813,11 @@ and (max-height: 700px) {
     <div class="teams">
 
       <div class="bears">
-        🐻 BEARS
+         BEARS
       </div>
 
       <div class="bulls">
-        BULLS 🐂
+        BULLS 
       </div>
 
     </div>
