@@ -5041,7 +5041,7 @@ and (max-height: 700px) {
       </div>
       <div class="value">
         ${battle.haRunColor || "NONE"}
-        ${battle.haRunLength || 0}
+        ${battle.haRunCandles ?? 0}
       </div>
     </div>
 
