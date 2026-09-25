@@ -2439,70 +2439,78 @@ function buildHeikinAshi(candles) {
 // --------------------------------------------------
 
 function getHARun(haCandles) {
-
-  if (
-    !Array.isArray(haCandles) ||
-    haCandles.length === 0
-  ) {
-
+  if (!Array.isArray(haCandles) || haCandles.length === 0) {
     return {
       color: "NONE",
-      count: 0
+      count: 0,
+      currentColor: "NONE",
+      doji: false
     };
-
   }
 
+  const last = haCandles[haCandles.length - 1];
 
-  const last =
-    haCandles[
-      haCandles.length - 1
-    ];
+  // If current candle is directional, count the current run normally.
+  if (last.color === "GREEN" || last.color === "RED") {
+    let count = 0;
 
+    for (let i = haCandles.length - 1; i >= 0; i--) {
+      if (haCandles[i].color !== last.color) {
+        break;
+      }
 
-  if (
-    last.color !== "GREEN" &&
-    last.color !== "RED"
-  ) {
+      count++;
+    }
 
     return {
       color: last.color,
-      count: 1
+      count,
+      currentColor: last.color,
+      doji: false
     };
-
   }
 
+  // Current candle is a DOJI.
+  // Preserve the directional run immediately preceding it.
+  let i = haCandles.length - 2;
+
+  while (i >= 0 && haCandles[i].color === "DOJI") {
+    i--;
+  }
+
+  if (i < 0) {
+    return {
+      color: "NONE",
+      count: 0,
+      currentColor: "DOJI",
+      doji: true
+    };
+  }
+
+  const previousColor = haCandles[i].color;
+
+  if (previousColor !== "GREEN" && previousColor !== "RED") {
+    return {
+      color: "NONE",
+      count: 0,
+      currentColor: "DOJI",
+      doji: true
+    };
+  }
 
   let count = 0;
 
-
-  for (
-    let i =
-      haCandles.length - 1;
-
-    i >= 0;
-
-    i--
-  ) {
-
-    if (
-      haCandles[i].color !==
-      last.color
-    ) {
-      break;
-    }
-
+  while (i >= 0 && haCandles[i].color === previousColor) {
     count++;
-
+    i--;
   }
 
-
   return {
-    color:
-      last.color,
-
-    count
+    color: previousColor,
+    count,
+    currentColor: "DOJI",
+    doji: true
   };
-
 }
 
 
