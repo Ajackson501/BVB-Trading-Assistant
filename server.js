@@ -87,6 +87,12 @@ const MAX_COMPLETED_CANDLES = 300;
 
 let historySeeded = false;
 
+// Daily higher-timeframe context. These bars are kept separate from
+// the 2-minute execution engine so Daily Bias can guide without vetoing
+// Oliver/BVB intraday signals.
+let dailyCandles = [];
+let dailyHistorySeeded = false;
+
 
 // ==================================================
 // WEBSOCKET STATE
@@ -334,6 +340,84 @@ async function seedHistoricalCandles() {
 
 }
 
+
+// ==================================================
+// SEED COMPLETED DAILY HISTORY FROM ALPACA
+// ==================================================
+
+function newYorkDateKey(dateInput) {
+  const date = dateInput instanceof Date ? dateInput : new Date(dateInput);
+  if (Number.isNaN(date.getTime())) return null;
+
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(date);
+
+  const get = (type) => parts.find((part) => part.type === type)?.value;
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+async function seedDailyCandles() {
+  if (!ALPACA_API_KEY || !ALPACA_SECRET_KEY) {
+    console.error("Cannot seed daily history: Alpaca credentials missing.");
+    return;
+  }
+
+  try {
+    console.log("Seeding completed daily GOOGL history from Alpaca...");
+
+    const end = new Date();
+    const start = new Date();
+    start.setUTCDate(start.getUTCDate() - 450);
+
+    const params = new URLSearchParams({
+      timeframe: "1Day",
+      start: start.toISOString(),
+      end: end.toISOString(),
+      limit: "1000",
+      feed: "iex",
+      adjustment: "raw"
+    });
+
+    const response = await fetch(
+      `https://data.alpaca.markets/v2/stocks/GOOGL/bars?${params.toString()}`,
+      {
+        headers: {
+          "APCA-API-KEY-ID": ALPACA_API_KEY,
+          "APCA-API-SECRET-KEY": ALPACA_SECRET_KEY
+        }
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      console.error("Daily seed failed:", response.status, data);
+      return;
+    }
+
+    const todayET = newYorkDateKey(new Date());
+
+    // Daily Bias deliberately uses completed daily bars only. The current
+    // trading day's still-forming daily candle is excluded.
+    dailyCandles = (data.bars || [])
+      .map(normalizeBar)
+      .filter((bar) => newYorkDateKey(bar.time) !== todayET)
+      .sort((a, b) => new Date(a.time) - new Date(b.time))
+      .slice(-300);
+
+    dailyHistorySeeded = dailyCandles.length >= 200;
+
+    console.log(
+      `Daily seed complete: ${dailyCandles.length} completed daily candles loaded.`
+    );
+  } catch (error) {
+    console.error("Daily seed error:", error);
+  }
+}
 
 // ==================================================
 // BUILD LIVE 2-MINUTE CANDLE
@@ -2598,6 +2682,162 @@ function getHABodyMomentum(
 
 
 // --------------------------------------------------
+// DAILY BIAS — HIGHER-TIMEFRAME CONTEXT ONLY
+// --------------------------------------------------
+
+function analyzeDailyBias(candles) {
+  if (!Array.isArray(candles) || candles.length < 200) {
+    return {
+      bias: "BUILDING",
+      arrow: "…",
+      confirmed: false,
+      confirmation: "WAITING_FOR_200_DAILY_BARS",
+      reason: `Need ${Math.max(0, 200 - (candles?.length || 0))} more completed daily candles.`,
+      completedCandles: Array.isArray(candles) ? candles.length : 0
+    };
+  }
+
+  const current = candles[candles.length - 1];
+  const price = Number(current.close);
+  const sma8 = calculateSMA(candles, 8);
+  const sma20 = calculateSMA(candles, 20);
+  const sma200 = calculateSMA(candles, 200);
+  const previousSMA8 = calculatePreviousSMA(candles, 8);
+  const previousSMA20 = calculatePreviousSMA(candles, 20);
+  const previousSMA200 = candles.length >= 201
+    ? calculatePreviousSMA(candles, 200)
+    : null;
+
+  const slope = (now, before) => {
+    if (!Number.isFinite(now) || !Number.isFinite(before)) return "UNAVAILABLE";
+    if (now > before) return "RISING";
+    if (now < before) return "FALLING";
+    return "FLAT";
+  };
+
+  const sma8Direction = slope(sma8, previousSMA8);
+  const sma20Direction = slope(sma20, previousSMA20);
+  const sma200Direction = slope(sma200, previousSMA200);
+  const structure = detectStructure(candles);
+  const ha = buildHeikinAshi(candles);
+  const currentHA = ha[ha.length - 1];
+  const haRun = getHARun(ha);
+
+  // The daily 20 SMA establishes the working regime. Daily HA confirms
+  // trend quality. The 8/200 and structure add context; they do not turn
+  // Daily Bias into an intraday entry trigger.
+  const bullish20Regime = price > sma20 && sma20Direction === "RISING";
+  const bearish20Regime = price < sma20 && sma20Direction === "FALLING";
+  const bullishHA = currentHA?.color === "GREEN" && !currentHA?.isDoji;
+  const bearishHA = currentHA?.color === "RED" && !currentHA?.isDoji;
+
+  let bias = "TRANSITION";
+  let arrow = "↔";
+  let confirmed = false;
+  let confirmation = "MIXED";
+
+  if (bullish20Regime) {
+    bias = "BULLISH";
+    arrow = "↑";
+    confirmed = bullishHA;
+    confirmation = bullishHA ? "HA_CONFIRMED" : "HA_NOT_CONFIRMED";
+  } else if (bearish20Regime) {
+    bias = "BEARISH";
+    arrow = "↓";
+    confirmed = bearishHA;
+    confirmation = bearishHA ? "HA_CONFIRMED" : "HA_NOT_CONFIRMED";
+  }
+
+  const evidence = [];
+  if (price > sma20) evidence.push("Daily price above 20 SMA");
+  if (price < sma20) evidence.push("Daily price below 20 SMA");
+  if (sma20Direction === "RISING") evidence.push("Daily 20 SMA rising");
+  if (sma20Direction === "FALLING") evidence.push("Daily 20 SMA falling");
+  if (price > sma200) evidence.push("Daily price above 200 SMA");
+  if (price < sma200) evidence.push("Daily price below 200 SMA");
+  if (structure === "HH_HL") evidence.push("Daily HH/HL structure");
+  if (structure === "LH_LL") evidence.push("Daily LH/LL structure");
+  if (bullishHA) evidence.push("Daily HA bullish confirmation");
+  if (bearishHA) evidence.push("Daily HA bearish confirmation");
+
+  return {
+    bias,
+    arrow,
+    confirmed,
+    confirmation,
+    reason:
+      bias === "TRANSITION"
+        ? "Daily 20 SMA regime is mixed/transitioning. No directional daily bias."
+        : `${bias} daily 20 SMA regime; ${confirmed ? "daily Heikin-Ashi confirms." : "daily Heikin-Ashi has not confirmed."}`,
+    price: Number(price.toFixed(4)),
+    sma8: Number(sma8.toFixed(4)),
+    sma20: Number(sma20.toFixed(4)),
+    sma200: Number(sma200.toFixed(4)),
+    sma8Direction,
+    sma20Direction,
+    sma200Direction,
+    structure,
+    haColor: currentHA?.color || "UNKNOWN",
+    haDoji: Boolean(currentHA?.isDoji),
+    haRunColor: haRun.color,
+    haRunCandles: haRun.count,
+    evidence,
+    analyzedCandle: current.time
+  };
+}
+
+function buildAIRead(battle, dailyBias) {
+  const bias = dailyBias?.bias || "BUILDING";
+  const control = battle?.control || "NEUTRAL";
+  const phase = battle?.phase || "WAIT";
+  const action = battle?.action || "WAIT";
+  const changeWatch = battle?.changeWatch || "OFF";
+
+  let alignment = "NEUTRAL / TRANSITION";
+
+  if (bias === "BULLISH" && control === "BULLS") alignment = "WITH DAILY BIAS";
+  if (bias === "BEARISH" && control === "BEARS") alignment = "WITH DAILY BIAS";
+  if (bias === "BULLISH" && control === "BEARS") alignment = "COUNTER DAILY BIAS";
+  if (bias === "BEARISH" && control === "BULLS") alignment = "COUNTER DAILY BIAS";
+
+  let headline = "WAIT — battle is not directional enough yet.";
+
+  if (changeWatch === "WARNING") {
+    headline = `${control} control is under reversal warning. Protect the current trend and wait for confirmation.`;
+  } else if (changeWatch === "WATCH") {
+    headline = `${control} still control the 2-minute battle, but exhaustion is developing.`;
+  } else if (action === "CALL_ENTRY_READY") {
+    headline = alignment === "WITH DAILY BIAS"
+      ? "CALL setup is confirmed and aligned with the Daily Bias."
+      : "CALL setup is confirmed intraday, but it is not aligned with the Daily Bias.";
+  } else if (action === "PUT_ENTRY_READY") {
+    headline = alignment === "WITH DAILY BIAS"
+      ? "PUT setup is confirmed and aligned with the Daily Bias."
+      : "PUT setup is confirmed intraday, but it is not aligned with the Daily Bias.";
+  } else if (control === "BULLS") {
+    headline = alignment === "WITH DAILY BIAS"
+      ? `Bulls control the 2-minute trend and are moving with the ${bias.toLowerCase()} Daily Bias.`
+      : alignment === "COUNTER DAILY BIAS"
+      ? `Bulls control the 2-minute trend, but the move is counter to the ${bias.toLowerCase()} Daily Bias.`
+      : "Bulls control the 2-minute trend while the Daily Bias is neutral/transitioning.";
+  } else if (control === "BEARS") {
+    headline = alignment === "WITH DAILY BIAS"
+      ? `Bears control the 2-minute trend and are moving with the ${bias.toLowerCase()} Daily Bias.`
+      : alignment === "COUNTER DAILY BIAS"
+      ? `Bears control the 2-minute trend, but the move is counter to the ${bias.toLowerCase()} Daily Bias.`
+      : "Bears control the 2-minute trend while the Daily Bias is neutral/transitioning.";
+  }
+
+  return {
+    headline,
+    alignment,
+    phase,
+    dailyConfirmation: dailyBias?.confirmation || "WAITING",
+    note: "Daily Bias guides trend-hold context; it does not prohibit a valid 2-minute Oliver/BVB signal."
+  };
+}
+
+// --------------------------------------------------
 // TREND BATTLE ANALYSIS
 // --------------------------------------------------
 
@@ -3912,9 +4152,31 @@ app.get(
 // ==================================================
 
 seedHistoricalCandles();
+seedDailyCandles();
 
 connectAlpacaStream();
 
+
+// ==================================================
+// DAILY BIAS ENDPOINT
+// ==================================================
+
+app.get(
+  "/daily-bias",
+  (req, res) => {
+    const dailyBias = analyzeDailyBias(dailyCandles);
+    const battle = analyzeTrendBattle(completedCandles);
+
+    res.json({
+      symbol: "GOOGL",
+      timeframe: "1Day",
+      dailyHistorySeeded,
+      completedDailyCandleCount: dailyCandles.length,
+      bias: dailyBias,
+      intradayAlignment: buildAIRead(battle, dailyBias)
+    });
+  }
+);
 
 // ==================================================
 // LIVE GOOGL ENDPOINT
@@ -4551,6 +4813,8 @@ app.get(
 
 
 const battle = analyzeTrendBattle(completedCandles);
+const dailyBias = analyzeDailyBias(dailyCandles);
+const aiRead = buildAIRead(battle, dailyBias);
 
 const ropePosition = Number(battle.ropePosition || 0);
 const ropePercent = Math.max(0, Math.min(100, 50 + ropePosition / 2));
@@ -4856,6 +5120,67 @@ body {
 }
 
 /* -------------------------
+   DAILY BIAS + AI READ
+------------------------- */
+
+.dailyBiasLabel {
+  font-size: 9px;
+  letter-spacing: 1.4px;
+  color: #7f8a99;
+}
+
+.dailyBiasValue {
+  margin-top: 2px;
+  font-size: 15px;
+  font-weight: 900;
+}
+
+.biasBull { color: #55e69a; }
+.biasBear { color: #ff5b67; }
+.biasNeutral { color: #f3c969; }
+
+.dailyConfirm,
+.marketLine {
+  margin-top: 2px;
+  font-size: 10px;
+  color: #9ba7b8;
+}
+
+.aiReadBox {
+  margin-top: 12px;
+  padding: 13px 14px;
+  border-radius: 12px;
+  background: #111720;
+  border: 1px solid #27303d;
+}
+
+.aiReadTitle {
+  font-size: 10px;
+  letter-spacing: 1.4px;
+  color: #7f8a99;
+}
+
+.aiReadHeadline {
+  margin-top: 5px;
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1.3;
+}
+
+.aiReadMeta {
+  margin-top: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #aeb8c6;
+}
+
+.aiReadNote {
+  margin-top: 4px;
+  font-size: 10px;
+  color: #7f8a99;
+}
+
+/* -------------------------
    WARNING
 ------------------------- */
 
@@ -5042,8 +5367,15 @@ and (max-height: 700px) {
     </div>
 
     <div class="session">
-      ${marketSession}<br>
-      ${regularHours ? "LIVE MARKET" : "MARKET CLOSED"}
+      <div class="dailyBiasLabel">DAILY BIAS</div>
+      <div class="dailyBiasValue ${dailyBias.bias === "BULLISH" ? "biasBull" : dailyBias.bias === "BEARISH" ? "biasBear" : "biasNeutral"}">
+        ${dailyBias.bias === "BULLISH" ? "🟢" : dailyBias.bias === "BEARISH" ? "🔴" : dailyBias.bias === "TRANSITION" ? "🟡" : "⚪"}
+        ${dailyBias.bias} ${dailyBias.arrow || ""}
+      </div>
+      <div class="dailyConfirm">
+        ${dailyBias.confirmed ? "HA CONFIRMED" : dailyBias.bias === "BUILDING" ? "BUILDING" : "HA NOT CONFIRMED"}
+      </div>
+      <div class="marketLine">${marketSession} · ${regularHours ? "LIVE MARKET" : "MARKET CLOSED"}</div>
     </div>
 
   </div>
@@ -5180,6 +5512,15 @@ and (max-height: 700px) {
       </div>
     </div>
 
+  </div>
+
+  <div class="aiReadBox">
+    <div class="aiReadTitle">AI READ</div>
+    <div class="aiReadHeadline">${aiRead.headline}</div>
+    <div class="aiReadMeta">
+      ${aiRead.alignment} · DAILY ${dailyBias.bias} · ${dailyBias.confirmation}
+    </div>
+    <div class="aiReadNote">${aiRead.note}</div>
   </div>
 
 
