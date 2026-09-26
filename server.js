@@ -20,6 +20,12 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 
 let latestAIAnalysis = null;
 let aiAnalysisInProgress = false;
+const MAX_AI_QUEUE = 25;
+let aiEventQueue = [];
+
+let aiEventsProcessed = 0;
+let aiEventsFailed = 0;
+
 
 // Separate credentials for the protected BVB event feed.
 // These are NOT Alpaca credentials. Store them only in Render environment variables.
