@@ -16,6 +16,10 @@ const PORT = process.env.PORT || 10000;
 
 const ALPACA_API_KEY = process.env.ALPACA_API_KEY;
 const ALPACA_SECRET_KEY = process.env.ALPACA_SECRET_KEY;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
+
+let latestAIAnalysis = null;
+let aiAnalysisInProgress = false;
 
 // Separate credentials for the protected BVB event feed.
 // These are NOT Alpaca credentials. Store them only in Render environment variables.
@@ -3767,6 +3771,110 @@ analyzedCandle:
 // TREND EVENT RECORDER
 // ===============================================
 
+
+
+// ===============================================
+// OPENAI BVB EVENT ANALYZER
+// ===============================================
+
+async function sendEventToOpenAI(aiPacket) {
+
+  if (!OPENAI_API_KEY) {
+    console.error("OPENAI_API_KEY is not configured.");
+    return;
+  }
+
+  if (aiAnalysisInProgress) {
+    console.log("AI analysis already running — event skipped.");
+    return;
+  }
+
+  aiAnalysisInProgress = true;
+
+  try {
+
+    console.log(
+      `Sending BVB event to OpenAI: ${aiPacket.control} | ${aiPacket.action}`
+    );
+
+    const response = await fetch(
+      "https://api.openai.com/v1/responses",
+      {
+        method: "POST",
+
+        headers: {
+          "Authorization": `Bearer ${OPENAI_API_KEY}`,
+          "Content-Type": "application/json"
+        },
+
+        body: JSON.stringify({
+          model: "gpt-5.6-luna",
+
+          input: [
+            {
+              role: "system",
+              content:
+                "You are the AI analysis layer for the BVB Trading Assistant. " +
+                "Analyze GOOGL 2-minute trend events using only the supplied market data. " +
+                "Do not invent prices, indicators, trades, or market conditions. " +
+                "Focus on trend direction, trend strength, Oliver signals, Heikin-Ashi behavior, " +
+                "entry readiness, reversal warnings, and invalidation. " +
+                "Be concise. Trading decisions remain with the user."
+            },
+
+            {
+              role: "user",
+              content:
+                "Analyze this BVB market event:\n\n" +
+                JSON.stringify(aiPacket, null, 2)
+            }
+          ]
+        })
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      console.error(
+        "OpenAI API error:",
+        response.status,
+        JSON.stringify(data)
+      );
+      return;
+    }
+
+    const text =
+      data.output
+        ?.flatMap(item => item.content || [])
+        ?.find(item => item.type === "output_text")
+        ?.text || null;
+
+    latestAIAnalysis = {
+      time: new Date().toISOString(),
+      eventTime: aiPacket.time,
+      symbol: aiPacket.symbol,
+      control: aiPacket.control,
+      action: aiPacket.action,
+      analysis: text
+    };
+
+    console.log("BVB AI ANALYSIS:", text);
+
+  } catch (error) {
+
+    console.error(
+      "Unable to send BVB event to OpenAI:",
+      error
+    );
+
+  } finally {
+
+    aiAnalysisInProgress = false;
+
+  }
+}
+
 function recordTrendEvent(analysis) {
   if (!analysis) return null;
 
@@ -3887,6 +3995,9 @@ function recordTrendEvent(analysis) {
 
   lastTrendEventKey = eventKey;
 
+  sendEventToOpenAI(event).catch(error => {
+  console.error("BVB AI event analysis failed:", error);
+});
   console.log(
     `BVB AI EVENT: ${snapshot.control} | ${snapshot.pressure} | ${snapshot.phase} | ${snapshot.action} | GOOGL $${price}`
   );
