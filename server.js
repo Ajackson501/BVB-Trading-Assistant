@@ -4560,9 +4560,11 @@ const battleControl = battle.control || "NEUTRAL";
 const battlePressure = battle.pressure || "WAITING";
 
 const tugIntensity =
-  battlePressure === "CONFIRMED" ? "tug-confirmed" :
-  battlePressure === "BUILDING" ? "tug-building" :
+  battlePressure === "DOMINANT" ? "tug-confirmed" :
+  battlePressure === "STRONG" ? "tug-confirmed" :
+  battlePressure === "CONTROL" ? "tug-building" :
   battlePressure === "EARLY" ? "tug-early" :
+  battlePressure === "BALANCED" ? "tug-waiting" :
   "tug-waiting";
 
 const battlePhase = battle.phase || "WAIT";
