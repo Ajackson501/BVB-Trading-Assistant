@@ -4029,6 +4029,75 @@ app.get("/test-openai", async (req, res) => {
     latestAIAnalysis
   });
 });
+// =============================================
+// OPENAI QUEUE TEST
+// =============================================
+
+app.get("/test-openai-queue", async (req, res) => {
+  const makeTestPacket = (number) => ({
+    symbol: "GOOGL",
+    timeframe: "2Min",
+    time: new Date().toISOString(),
+    price: 0,
+    changed: [`QUEUE_TEST_${number}`],
+    control: "NEUTRAL",
+    pressure: "TEST",
+    phase: `QUEUE_TEST_${number}`,
+    action: "WAIT",
+
+    ha: {
+      control: "INDECISION",
+      run: "NONE",
+      candles: 0,
+      doji: false
+    },
+
+    entry: {
+      ready: false,
+      direction: "NONE",
+      price: null,
+      invalidation: null,
+      event: `QUEUE_TEST_${number}`
+    },
+
+    reversal: {
+      watch: "OFF",
+      warning: false,
+      exhaustionScore: 0
+    },
+
+    structure: `QUEUE_TEST_${number}`,
+    controlFlip: false,
+
+    evidence: {
+      bull: [],
+      bear: []
+    }
+  });
+
+  const packets = [
+    makeTestPacket(1),
+    makeTestPacket(2),
+    makeTestPacket(3)
+  ];
+
+  // Fire rapidly on purpose. The first should process
+  // while the remaining packets enter the queue.
+  packets.forEach(packet => {
+    sendEventToOpenAI(packet);
+  });
+
+  res.json({
+    success: true,
+    message: "3 OpenAI queue test events submitted.",
+    queueSize: aiEventQueue.length,
+    aiAnalysisInProgress,
+    aiEventsProcessed,
+    aiEventsFailed
+  });
+});
+
+
 function recordTrendEvent(analysis) {
   if (!analysis) return null;
 
