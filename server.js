@@ -2610,7 +2610,6 @@ function analyzeOliver(candles) {
       current.time
 
   };
-}
 
 // ==================================================
 // BVB V2 — TUG-OF-WAR TREND ENGINE
