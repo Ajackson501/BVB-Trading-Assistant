@@ -1470,26 +1470,33 @@ function detectReversalBreak(
 
 
 // ==================================================
-// OLIVER ANALYSIS V1.1
+// OLIVER ANALYSIS V1.2
+// Restores full 200 SMA regime authorization
 // ==================================================
-
 function analyzeOliver(candles) {
-
   if (
     !Array.isArray(candles) ||
-    candles.length < 21
+    candles.length < 200
   ) {
-
     return {
-
       action: "WAIT",
-
       reason:
-        "Need at least 21 completed candles for Oliver analysis."
-
+        "Need at least 200 completed candles for Oliver's 200 SMA.",
+      sma200Status: "BUILDING",
+      completedCandles:
+        Array.isArray(candles)
+          ? candles.length
+          : 0,
+      candlesNeeded:
+        Math.max(
+          0,
+          200 -
+            (Array.isArray(candles)
+              ? candles.length
+              : 0)
+        )
     };
   }
-
 
   const current =
     candles[candles.length - 1];
@@ -1497,31 +1504,20 @@ function analyzeOliver(candles) {
   const previous =
     candles[candles.length - 2];
 
-
   const price =
     Number(current.close);
 
-
+  // ------------------------------------------------
+  // MOVING AVERAGES
+  // ------------------------------------------------
   const sma8 =
-    calculateSMA(
-      candles,
-      8
-    );
-
+    calculateSMA(candles, 8);
 
   const sma20 =
-    calculateSMA(
-      candles,
-      20
-    );
-
+    calculateSMA(candles, 20);
 
   const sma200 =
-    calculateSMA(
-      candles,
-      200
-    );
-
+    calculateSMA(candles, 200);
 
   const previousSMA8 =
     calculatePreviousSMA(
@@ -1529,27 +1525,34 @@ function analyzeOliver(candles) {
       8
     );
 
-
   const previousSMA20 =
     calculatePreviousSMA(
       candles,
       20
     );
 
-
+  // 201 candles are required to determine
+  // the direction/slope of the 200 SMA.
   const previousSMA200 =
-    calculatePreviousSMA(
-      candles,
-      200
-    );
-
+    candles.length >= 201
+      ? calculatePreviousSMA(
+          candles,
+          200
+        )
+      : null;
 
   const directionOf =
-    (currentValue, previousValue) => {
-
+    (
+      currentValue,
+      previousValue
+    ) => {
       if (
-        !Number.isFinite(currentValue) ||
-        !Number.isFinite(previousValue)
+        !Number.isFinite(
+          currentValue
+        ) ||
+        !Number.isFinite(
+          previousValue
+        )
       ) {
         return "UNAVAILABLE";
       }
@@ -1571,13 +1574,11 @@ function analyzeOliver(candles) {
       return "FLAT";
     };
 
-
   const sma8Direction =
     directionOf(
       sma8,
       previousSMA8
     );
-
 
   const sma20Direction =
     directionOf(
@@ -1585,12 +1586,509 @@ function analyzeOliver(candles) {
       previousSMA20
     );
 
-
   const sma200Direction =
     directionOf(
       sma200,
       previousSMA200
     );
+
+  // ------------------------------------------------
+  // SHORT-TERM 8/20 STATE
+  // ------------------------------------------------
+  let state = "MIXED";
+
+  if (
+    price > sma8 &&
+    sma8 > sma20 &&
+    sma8Direction === "RISING" &&
+    sma20Direction === "RISING"
+  ) {
+    state = "BULLISH";
+  }
+
+  if (
+    price < sma8 &&
+    sma8 < sma20 &&
+    sma8Direction === "FALLING" &&
+    sma20Direction === "FALLING"
+  ) {
+    state = "BEARISH";
+  }
+
+  // ------------------------------------------------
+  // 200 SMA POSITION
+  // ------------------------------------------------
+  let sma200Context =
+    "AT_200";
+
+  if (price > sma200) {
+    sma200Context =
+      "ABOVE_200";
+  } else if (price < sma200) {
+    sma200Context =
+      "BELOW_200";
+  }
+
+  // ------------------------------------------------
+  // OLIVER 200 SMA REGIME
+  //
+  // Above + rising = bullish regime
+  // Below + falling = bearish regime
+  // Everything else = transition/neutral
+  // ------------------------------------------------
+  let regime =
+    "TRANSITION";
+
+  if (
+    price > sma200 &&
+    sma200Direction === "RISING"
+  ) {
+    regime =
+      "BULLISH_REGIME";
+  }
+
+  if (
+    price < sma200 &&
+    sma200Direction === "FALLING"
+  ) {
+    regime =
+      "BEARISH_REGIME";
+  }
+
+  if (
+    sma200Direction ===
+      "UNAVAILABLE"
+  ) {
+    regime =
+      "REGIME_BUILDING";
+  }
+
+  // ------------------------------------------------
+  // 200 ALIGNMENT
+  // ------------------------------------------------
+  let sma200Alignment =
+    "NEUTRAL";
+
+  if (
+    state === "BULLISH" &&
+    regime === "BULLISH_REGIME"
+  ) {
+    sma200Alignment =
+      "ALIGNED";
+  }
+
+  if (
+    state === "BEARISH" &&
+    regime === "BEARISH_REGIME"
+  ) {
+    sma200Alignment =
+      "ALIGNED";
+  }
+
+  if (
+    state === "BULLISH" &&
+    regime === "BEARISH_REGIME"
+  ) {
+    sma200Alignment =
+      "COUNTER_TREND";
+  }
+
+  if (
+    state === "BEARISH" &&
+    regime === "BULLISH_REGIME"
+  ) {
+    sma200Alignment =
+      "COUNTER_TREND";
+  }
+
+  // ------------------------------------------------
+  // STANDARD OLIVER CONDITIONS
+  // ------------------------------------------------
+  const structure =
+    detectStructure(candles);
+
+  const bullishTakeover =
+    isBullishTakeover(
+      previous,
+      current
+    );
+
+  const bearishTakeover =
+    isBearishTakeover(
+      previous,
+      current
+    );
+
+  const expansion =
+    detectExpansion(candles);
+
+  // ------------------------------------------------
+  // EXPERIMENTAL ENTRY RECOGNITION
+  // ------------------------------------------------
+  const takeoverNearSMA =
+    detectTakeoverNearSMA(
+      candles,
+      sma8,
+      sma20
+    );
+
+  const compressionExpansion =
+    detectCompressionExpansion(
+      candles
+    );
+
+  const reversalBreak =
+    detectReversalBreak(
+      candles
+    );
+
+  // ------------------------------------------------
+  // LOCATION
+  // ------------------------------------------------
+  const distanceFrom8 =
+    Math.abs(
+      price - sma8
+    );
+
+  const distanceFrom20 =
+    Math.abs(
+      price - sma20
+    );
+
+  const distanceFrom200 =
+    Math.abs(
+      price - sma200
+    );
+
+  let nearestSMA =
+    "8_SMA";
+
+  let nearestDistance =
+    distanceFrom8;
+
+  if (
+    distanceFrom20 <
+    nearestDistance
+  ) {
+    nearestSMA =
+      "20_SMA";
+    nearestDistance =
+      distanceFrom20;
+  }
+
+  if (
+    distanceFrom200 <
+    nearestDistance
+  ) {
+    nearestSMA =
+      "200_SMA";
+  }
+
+  // ------------------------------------------------
+  // EVIDENCE CHECKS
+  // ------------------------------------------------
+  let bullishChecks = 0;
+  let bearishChecks = 0;
+
+  if (state === "BULLISH") {
+    bullishChecks++;
+  }
+
+  if (state === "BEARISH") {
+    bearishChecks++;
+  }
+
+  if (structure === "HH_HL") {
+    bullishChecks++;
+  }
+
+  if (structure === "LH_LL") {
+    bearishChecks++;
+  }
+
+  if (bullishTakeover) {
+    bullishChecks++;
+  }
+
+  if (bearishTakeover) {
+    bearishChecks++;
+  }
+
+  if (expansion === "GREEN") {
+    bullishChecks++;
+  }
+
+  if (expansion === "RED") {
+    bearishChecks++;
+  }
+
+  // 200 regime is fundamental,
+  // not merely price above/below the line.
+  if (
+    regime === "BULLISH_REGIME"
+  ) {
+    bullishChecks++;
+  }
+
+  if (
+    regime === "BEARISH_REGIME"
+  ) {
+    bearishChecks++;
+  }
+
+  // Experimental early-entry patterns.
+  if (
+    takeoverNearSMA?.direction ===
+      "BULLISH"
+  ) {
+    bullishChecks += 2;
+  }
+
+  if (
+    takeoverNearSMA?.direction ===
+      "BEARISH"
+  ) {
+    bearishChecks += 2;
+  }
+
+  if (
+    compressionExpansion ===
+      "BULLISH"
+  ) {
+    bullishChecks += 2;
+  }
+
+  if (
+    compressionExpansion ===
+      "BEARISH"
+  ) {
+    bearishChecks += 2;
+  }
+
+  if (
+    reversalBreak?.direction ===
+      "BULLISH"
+  ) {
+    bullishChecks += 2;
+  }
+
+  if (
+    reversalBreak?.direction ===
+      "BEARISH"
+  ) {
+    bearishChecks += 2;
+  }
+
+  // ------------------------------------------------
+  // ENTRY EVENT
+  // ------------------------------------------------
+  let entryEvent =
+    "NONE";
+
+  if (takeoverNearSMA) {
+    entryEvent =
+      `${takeoverNearSMA.direction}_TAKEOVER_NEAR_${takeoverNearSMA.near}`;
+  }
+
+  if (compressionExpansion) {
+    entryEvent =
+      `${compressionExpansion}_COMPRESSION_EXPANSION`;
+  }
+
+  if (reversalBreak) {
+    entryEvent =
+      `${reversalBreak.direction}_REVERSAL_BREAK`;
+  }
+
+  const bullishEntryEvent =
+    takeoverNearSMA?.direction ===
+      "BULLISH" ||
+    compressionExpansion ===
+      "BULLISH" ||
+    reversalBreak?.direction ===
+      "BULLISH";
+
+  const bearishEntryEvent =
+    takeoverNearSMA?.direction ===
+      "BEARISH" ||
+    compressionExpansion ===
+      "BEARISH" ||
+    reversalBreak?.direction ===
+      "BEARISH";
+
+  // ------------------------------------------------
+  // REGIME AUTHORIZATION
+  // ------------------------------------------------
+  const bullishAuthorized =
+    regime === "BULLISH_REGIME";
+
+  const bearishAuthorized =
+    regime === "BEARISH_REGIME";
+
+  // ------------------------------------------------
+  // ACTION
+  // ------------------------------------------------
+  let action = "WAIT";
+
+  let reason =
+    "No confirmed Oliver entry event.";
+
+  if (
+    bullishEntryEvent &&
+    bullishChecks >= 3 &&
+    bullishChecks >
+      bearishChecks
+  ) {
+    if (bullishAuthorized) {
+      action =
+        "CALL_SETUP";
+
+      reason =
+        "Bullish Oliver event confirmed inside an authorized bullish 200 SMA regime.";
+    } else {
+      action =
+        "ARMED";
+
+      reason =
+        "Bullish event detected, but the 200 SMA regime does not yet authorize the CALL setup.";
+    }
+  }
+
+  if (
+    bearishEntryEvent &&
+    bearishChecks >= 3 &&
+    bearishChecks >
+      bullishChecks
+  ) {
+    if (bearishAuthorized) {
+      action =
+        "PUT_SETUP";
+
+      reason =
+        "Bearish Oliver event confirmed inside an authorized bearish 200 SMA regime.";
+    } else {
+      action =
+        "ARMED";
+
+      reason =
+        "Bearish event detected, but the 200 SMA regime does not yet authorize the PUT setup.";
+    }
+  }
+
+  // ------------------------------------------------
+  // TRIGGER / INVALIDATION
+  // ------------------------------------------------
+  let trigger = null;
+  let invalidation = null;
+
+  if (
+    action === "CALL_SETUP"
+  ) {
+    trigger =
+      Number(current.high);
+
+    invalidation =
+      Number(current.low);
+  }
+
+  if (
+    action === "PUT_SETUP"
+  ) {
+    trigger =
+      Number(current.low);
+
+    invalidation =
+      Number(current.high);
+  }
+
+  // ------------------------------------------------
+  // SETUP QUALITY
+  // ------------------------------------------------
+  let setupQuality = "C";
+
+  if (
+    action === "CALL_SETUP" ||
+    action === "PUT_SETUP"
+  ) {
+    setupQuality =
+      "A";
+  } else if (
+    action === "ARMED"
+  ) {
+    setupQuality =
+      "B";
+  }
+
+  // ------------------------------------------------
+  // RESULT
+  // ------------------------------------------------
+  return {
+    action,
+    reason,
+
+    setupQuality,
+
+    state,
+    regime,
+
+    bullishAuthorized,
+    bearishAuthorized,
+
+    price:
+      Number(
+        price.toFixed(4)
+      ),
+
+    sma8:
+      Number(
+        sma8.toFixed(4)
+      ),
+
+    sma20:
+      Number(
+        sma20.toFixed(4)
+      ),
+
+    sma200:
+      Number(
+        sma200.toFixed(4)
+      ),
+
+    sma200Status:
+      candles.length >= 201
+        ? "LIVE_WITH_SLOPE"
+        : "LIVE_WAITING_FOR_SLOPE",
+
+    sma8Direction,
+    sma20Direction,
+    sma200Direction,
+
+    sma200Context,
+    sma200Alignment,
+
+    structure,
+    nearestSMA,
+
+    bullishTakeover,
+    bearishTakeover,
+    expansion,
+
+    takeoverNearSMA,
+    compressionExpansion,
+    reversalBreak,
+
+    entryEvent,
+
+    bullishChecks,
+    bearishChecks,
+
+    trigger,
+    invalidation,
+
+    analyzedCandle:
+      current.time
+  };
+}
 
 
   // ------------------------------------------------
