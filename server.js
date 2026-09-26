@@ -3780,21 +3780,35 @@ analyzedCandle:
 // ===============================================
 
 async function sendEventToOpenAI(aiPacket) {
-
   if (!OPENAI_API_KEY) {
     console.error("OPENAI_API_KEY is not configured.");
     return;
   }
 
+  if (!aiPacket) {
+    console.error("No BVB event packet supplied to OpenAI.");
+    return;
+  }
+
+  // Queue the event instead of losing it when another analysis is running.
   if (aiAnalysisInProgress) {
-    console.log("AI analysis already running — event skipped.");
+    if (aiEventQueue.length >= MAX_AI_QUEUE) {
+      aiEventQueue.shift();
+      console.warn("AI queue full — oldest event removed.");
+    }
+
+    aiEventQueue.push(aiPacket);
+
+    console.log(
+      `AI busy — BVB event queued. Queue size: ${aiEventQueue.length}`
+    );
+
     return;
   }
 
   aiAnalysisInProgress = true;
 
   try {
-
     console.log(
       `Sending BVB event to OpenAI: ${aiPacket.control} | ${aiPacket.action}`
     );
@@ -3815,19 +3829,62 @@ async function sendEventToOpenAI(aiPacket) {
           input: [
             {
               role: "system",
+
               content:
                 "You are the AI analysis layer for the BVB Trading Assistant. " +
-                "Analyze GOOGL 2-minute trend events using only the supplied market data. " +
-                "Do not invent prices, indicators, trades, or market conditions. " +
-                "Focus on trend direction, trend strength, Oliver signals, Heikin-Ashi behavior, " +
-                "entry readiness, reversal warnings, and invalidation. " +
-                "Be concise. Trading decisions remain with the user."
+
+                "Analyze GOOGL 2-minute trend events using ONLY the supplied market data. " +
+
+                "Never invent prices, indicators, candles, trades, positions, or market conditions. " +
+
+                "Your job is to independently evaluate whether the event represents a possible new trend, " +
+                "trend continuation, weakening trend, reversal, failed setup, or WAIT condition. " +
+
+                "Apply the established Trading Agents framework while keeping the agents distinct. " +
+
+                "AGENT OLIVER: Evaluate State -> Location -> Event -> Action. " +
+                "Pay special attention to the 8 SMA and 20 SMA relationship and slope, " +
+                "price location relative to those averages, bullish/bearish takeover candles near the 8/20 SMA area, " +
+                "pullback -> small or indecisive candles -> expansion candle, " +
+                "higher-low or lower-high reversal clusters, consecutive directional candles, " +
+                "breaks of recent candle highs/lows, trend continuation, clean air, and invalidation. " +
+
+                "Do not assume 200 SMA information unless it is explicitly supplied in the event packet. " +
+
+                "AGENT C: Evaluate Heikin-Ashi evidence only when Heikin-Ashi data is actually supplied. " +
+                "Look for consecutive same-color runs, flat-bottom green candles, flat-top red candles, " +
+                "no-wick conviction, pullback behavior, and Heikin-Ashi doji/indecision preceding possible reversals. " +
+                "Do not invent Heikin-Ashi candles from missing data. " +
+
+                "MOMENTUM VIEW: Evaluate expansion, clean structure, momentum, breakout strength, " +
+                "follow-through, and rapid invalidation. " +
+
+                "Prioritize early trend recognition without forcing an entry. WAIT is always valid. " +
+
+                "Distinguish between an EARLY WATCH condition and a CONFIRMED setup. " +
+                "An early warning is not automatically an entry signal. " +
+
+                "Return a concise trading-assistant assessment using exactly these headings:\n" +
+                "MARKET STATE:\n" +
+                "DIRECTION:\n" +
+                "OLIVER:\n" +
+                "AGENT C:\n" +
+                "MOMENTUM:\n" +
+                "ENTRY READINESS:\n" +
+                "INVALIDATION:\n" +
+                "FINAL READ:\n\n" +
+
+                "For DIRECTION use BULLISH, BEARISH, MIXED, or NEUTRAL. " +
+                "For ENTRY READINESS use WAIT, EARLY WATCH, READY, or INVALIDATED. " +
+
+                "Trading decisions remain with the user. Keep the response concise."
             },
 
             {
               role: "user",
+
               content:
-                "Analyze this BVB market event:\n\n" +
+                "Analyze this BVB market event using only the following data:\n\n" +
                 JSON.stringify(aiPacket, null, 2)
             }
           ]
@@ -3838,32 +3895,56 @@ async function sendEventToOpenAI(aiPacket) {
     const data = await response.json();
 
     if (!response.ok) {
+      aiEventsFailed += 1;
+
       console.error(
         "OpenAI API error:",
         response.status,
         JSON.stringify(data)
       );
+
       return;
     }
 
+    // Responses API may provide output_text directly.
+    // Fall back to searching the output content array.
     const text =
+      data.output_text ||
       data.output
         ?.flatMap(item => item.content || [])
         ?.find(item => item.type === "output_text")
-        ?.text || null;
+        ?.text ||
+      null;
+
+    if (!text) {
+      aiEventsFailed += 1;
+
+      console.error(
+        "OpenAI returned no analysis text:",
+        JSON.stringify(data)
+      );
+
+      return;
+    }
 
     latestAIAnalysis = {
       time: new Date().toISOString(),
-      eventTime: aiPacket.time,
-      symbol: aiPacket.symbol,
-      control: aiPacket.control,
-      action: aiPacket.action,
+      eventTime: aiPacket.time || null,
+      symbol: aiPacket.symbol || "GOOGL",
+      control: aiPacket.control || null,
+      action: aiPacket.action || null,
       analysis: text
     };
 
-    console.log("BVB AI ANALYSIS:", text);
+    aiEventsProcessed += 1;
+
+    console.log("================================");
+    console.log("BVB AI ANALYSIS");
+    console.log(text);
+    console.log("================================");
 
   } catch (error) {
+    aiEventsFailed += 1;
 
     console.error(
       "Unable to send BVB event to OpenAI:",
@@ -3871,11 +3952,23 @@ async function sendEventToOpenAI(aiPacket) {
     );
 
   } finally {
-
     aiAnalysisInProgress = false;
 
+    // Process the next event automatically.
+    if (aiEventQueue.length > 0) {
+      const nextPacket = aiEventQueue.shift();
+
+      console.log(
+        `Processing next queued AI event. Remaining: ${aiEventQueue.length}`
+      );
+
+      setImmediate(() => {
+        sendEventToOpenAI(nextPacket);
+      });
+    }
   }
 }
+
 // =============================================
 // MANUAL OPENAI CONNECTION TEST
 // =============================================
