@@ -3876,7 +3876,60 @@ async function sendEventToOpenAI(aiPacket) {
 
   }
 }
+// =============================================
+// MANUAL OPENAI CONNECTION TEST
+// =============================================
 
+app.get("/test-openai", async (req, res) => {
+  const testPacket = {
+    symbol: "GOOGL",
+    timeframe: "2Min",
+    time: new Date().toISOString(),
+    price: 0,
+    changed: ["MANUAL_TEST"],
+    control: "NEUTRAL",
+    pressure: "TEST",
+    phase: "TEST",
+    action: "WAIT",
+
+    ha: {
+      control: "INDECISION",
+      run: "NONE",
+      candles: 0,
+      doji: false
+    },
+
+    entry: {
+      ready: false,
+      direction: "NONE",
+      price: null,
+      invalidation: null,
+      event: "MANUAL_TEST"
+    },
+
+    reversal: {
+      watch: "OFF",
+      warning: false,
+      exhaustionScore: 0
+    },
+
+    structure: "TEST",
+    controlFlip: false,
+
+    evidence: {
+      bull: [],
+      bear: []
+    }
+  };
+
+  await sendEventToOpenAI(testPacket);
+
+  res.json({
+    success: true,
+    message: "Test packet sent to OpenAI.",
+    latestAIAnalysis
+  });
+});
 function recordTrendEvent(analysis) {
   if (!analysis) return null;
 
