@@ -5115,15 +5115,19 @@ and (max-height: 700px) {
 
   <div class="actionBox">
 
-    <div class="action">
-      ${
-        entryCrossed === "BULL_ENTRY"
-          ? "🔔 CALL ENTRY"
-          : entryCrossed === "BEAR_ENTRY"
-          ? "🔔 PUT ENTRY"
-          : battleAction
-      }
-    </div>
+<div class="action">
+  ${
+    battleAction === "CALL_ENTRY_READY"
+      ? "🔔 CALL ENTRY READY"
+      : battleAction === "PUT_ENTRY_READY"
+      ? "🔔 PUT ENTRY READY"
+      : entryCrossed === "BULL_ENTRY"
+      ? "BULL ENTRY ZONE"
+      : entryCrossed === "BEAR_ENTRY"
+      ? "BEAR ENTRY ZONE"
+      : battleAction
+  }
+</div> 
 
     <div class="phase">
       ${battlePhase}
