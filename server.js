@@ -4962,14 +4962,14 @@ const markDirection =
   regularHours && battleAction === "PUT_ENTRY_READY" && hold.direction !== "BULL" ? "PUT" :
   regularHours && hold.stage === "HOLD" && hold.direction === "BULL" && battleControl === "BULLS" ? "CALL" :
   regularHours && hold.stage === "HOLD" && hold.direction === "BEAR" && battleControl === "BEARS" ? "PUT" :
+  regularHours && battleControl === "BULLS" && hold.direction !== "BEAR" ? "CALL" :
+  regularHours && battleControl === "BEARS" && hold.direction !== "BULL" ? "PUT" :
   "NONE";
-// Dashboard scoreboards: completed Heikin-Ashi run by side.
+// V2.3 dashboard display data: side-specific HA scoreboards + live 2-minute clock.
 const dashboardHA = buildHeikinAshi(completedCandles);
 const dashboardHARun = getHARun(dashboardHA);
 const bearHARun = dashboardHARun.color === "RED" ? dashboardHARun.count : 0;
 const bullHARun = dashboardHARun.color === "GREEN" ? dashboardHARun.count : 0;
-
-// Live developing 2-minute candle data for the lower candle clock.
 const candleClockData = {
   time: developingCandle?.time || null,
   open: Number(developingCandle?.open),
@@ -5112,26 +5112,6 @@ body {
 .bulls {
   color: #55e69a;
 }
-
-.sideScore {
-  min-width: 94px;
-  padding: 5px 9px 6px;
-  border: 2px solid currentColor;
-  border-radius: 7px;
-  background: #090d13;
-  text-align: center;
-  box-shadow: inset 0 0 0 2px rgba(255,255,255,.04), 0 3px 10px rgba(0,0,0,.35);
-}
-.sideScore span, .sideScore small { display:block; }
-.sideScore span { font-size: 11px; letter-spacing: 1.4px; }
-.sideScore strong {
-  display:block; margin: 1px 0; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
-  font-size: 29px; line-height: .95; letter-spacing: 2px;
-  text-shadow: 0 0 8px currentColor;
-}
-.sideScore small { font-size: 8px; letter-spacing: 1.2px; opacity:.85; }
-.bearScore { color:#ff5b67; }
-.bullScore { color:#55e69a; }
 
 .ropeArea {
   position: relative;
@@ -5374,31 +5354,6 @@ body {
   color: #7f8a99;
 }
 
-
-/* -------------------------
-   LIVE 2-MINUTE CANDLE CLOCK
-------------------------- */
-.candleClock {
-  grid-area: clock;
-  display:grid;
-  grid-template-columns: auto 1fr auto;
-  gap: 10px;
-  align-items:center;
-  padding: 9px 12px;
-  border:1px solid #27303d;
-  border-radius:12px;
-  background:#111720;
-}
-.candleClockLabel { font-size:10px; letter-spacing:1.2px; color:#8d99a9; }
-.candleClockTime {
-  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
-  font-size:24px; font-weight:900; text-align:center;
-}
-.candleClockMove { font-size:14px; font-weight:900; text-align:right; min-width:105px; }
-.clockUp { color:#55e69a; }
-.clockDown { color:#ff5b67; }
-.clockFlat { color:#f3c969; }
-
 /* -------------------------
    WARNING
 ------------------------- */
@@ -5589,7 +5544,6 @@ body { padding: clamp(8px, 1.3vw, 16px); }
     "arena arena"
     "action tracker"
     "cards cards"
-    "clock clock"
     "hold analysis"
     "warning warning";
   gap: clamp(5px, .8vw, 10px);
@@ -5604,7 +5558,6 @@ body { padding: clamp(8px, 1.3vw, 16px); }
 .entryTracker { grid-area: tracker; }
 .holdBox { grid-area: hold; }
 .analysisBox { grid-area: analysis; }
-.candleClock { grid-area: clock; }
 .warning { grid-area: warning; }
 .ropeArea { height: clamp(115px, 17vh, 175px); }
 .tug-character { width: min(38%, 40vh); }
@@ -5633,7 +5586,7 @@ body { padding: clamp(8px, 1.3vw, 16px); }
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas:
       "header" "status" "arena" "action" "tracker"
-      "cards" "clock" "hold" "analysis" "warning";
+      "cards" "hold" "analysis" "warning";
     gap: 5px;
   }
   .header { gap: 8px; }
@@ -5673,7 +5626,6 @@ body { padding: clamp(8px, 1.3vw, 16px); }
       "status action"
       "arena tracker"
       "cards cards"
-      "clock clock"
       "hold analysis"
       "warning warning";
     gap: 4px 7px;
@@ -5705,6 +5657,93 @@ body { padding: clamp(8px, 1.3vw, 16px); }
   .aiReadHeadline { margin-top: 2px; font-size: 11px; }
   .aiReadMeta, .aiReadNote { font-size: 9px; margin-top: 2px; }
   .warning { padding: 4px; font-size: 10px; }
+}
+
+
+.candleMiniCard .value { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+#candleCountdown { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:15px; }
+#candleMove { font-size:10px; color:#f3c969; }
+#candleMove.up { color:#55e69a; }
+#candleMove.down { color:#ff5b67; }
+
+/* =========================================
+   V2.3 COCKPIT DASHBOARD UPGRADE
+   Central round entry control + contoured readout panels
+   ========================================= */
+.teamOverlay { position:absolute; top:7px; z-index:11; font-size:clamp(15px,2.1vw,24px); font-weight:1000; letter-spacing:1px; text-shadow:0 2px 5px #000,0 0 10px #000; }
+.teamOverlay.bearOverlay { left:2%; color:#ff6570; }
+.teamOverlay.bullOverlay { right:2%; color:#62efa5; }
+.haSideScore {
+  position:absolute; top:5px; z-index:12; min-width:92px; padding:4px 9px 5px;
+  border:2px solid currentColor; border-radius:7px; background:#080d13; text-align:center;
+  box-shadow:inset 0 0 10px rgba(255,255,255,.04),0 3px 10px rgba(0,0,0,.45);
+}
+.haSideScore.bearScore { left:17%; color:#ff5b67; }
+.haSideScore.bullScore { right:17%; color:#55e69a; }
+.haSideScore .scoreTeam { font-size:9px; font-weight:900; letter-spacing:1.2px; }
+.haSideScore .scoreNumber { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:23px; line-height:1; font-weight:1000; text-shadow:0 0 8px currentColor; }
+.haSideScore .scoreLabel { font-size:7px; letter-spacing:1.3px; opacity:.9; margin-top:2px; }
+.arena .teams { display:none; }
+
+.cockpit {
+  grid-area: cockpit; position:relative; display:grid;
+  grid-template-columns:minmax(0,1fr) clamp(132px,17vw,188px) minmax(0,1fr);
+  grid-template-areas:"action center hold" "analysis center tracker";
+  gap:8px 0; align-items:stretch; min-height:205px; margin-top:0;
+}
+.cockpit .actionBox { grid-area:action; }
+.cockpit .holdBox { grid-area:hold; }
+.cockpit .analysisBox { grid-area:analysis; }
+.cockpit .entryTracker { grid-area:tracker; }
+.cockpit .actionBox,.cockpit .holdBox,.cockpit .analysisBox,.cockpit .entryTracker {
+  margin:0; min-width:0; display:flex; flex-direction:column; justify-content:center;
+  background:linear-gradient(180deg,#151d28,#0e141d); border:1px solid #303b49;
+}
+.cockpit .actionBox,.cockpit .analysisBox { border-radius:16px 0 0 16px; padding-right:34px; }
+.cockpit .holdBox,.cockpit .entryTracker { border-radius:0 16px 16px 0; padding-left:34px; }
+.cockpitCenter {
+  grid-area:center; z-index:5; align-self:center; justify-self:center; width:clamp(132px,17vw,188px);
+  aspect-ratio:1; border-radius:50%; padding:10px; background:radial-gradient(circle at 50% 40%,#2a3441 0 44%,#10161e 45% 63%,#596473 64% 67%,#090d12 68%);
+  box-shadow:0 0 0 5px #080c12,0 0 0 7px #27313e,0 12px 28px rgba(0,0,0,.6);
+  display:flex; align-items:center; justify-content:center;
+}
+#entryTrackerButton {
+  width:100%; height:100%; min-height:0; padding:15px; border-radius:50%; border:3px solid #ffe49b;
+  background:radial-gradient(circle at 50% 35%,#ffe17e,#d8a72d 70%,#9a6f11); color:#11161d;
+  box-shadow:inset 0 3px 7px rgba(255,255,255,.5),inset 0 -6px 12px rgba(79,49,0,.35),0 0 20px rgba(244,201,93,.25);
+  font-size:clamp(12px,1.45vw,18px); line-height:1.15; font-weight:1000; letter-spacing:.04em; cursor:pointer;
+}
+#entryTrackerButton:disabled { opacity:.52; filter:grayscale(.35); cursor:not-allowed; }
+.entryTracker { display:flex !important; text-align:left; }
+.entryTrackerTitle,#entryTrackerState,#entryTrackerDetail,.entryTrackerFoot { margin:0; }
+.entryTrackerTitle { color:#ffdc79; }
+#entryTrackerState { margin-top:4px; }
+#entryTrackerDetail { margin-top:3px; }
+.entryTrackerFoot { margin-top:4px; }
+.dashboard { grid-template-areas:"header header" "status status" "arena arena" "cockpit cockpit" "cards cards" "warning warning"; }
+.actionBox,.entryTracker,.holdBox,.analysisBox { grid-area:unset; }
+
+@media (max-width:700px) and (orientation:portrait) {
+  .dashboard { grid-template-areas:"header" "status" "arena" "cockpit" "cards" "warning"; }
+  .cockpit { grid-template-columns:minmax(0,1fr) 116px minmax(0,1fr); grid-template-areas:"action center hold" "analysis center tracker"; min-height:170px; gap:5px 0; }
+  .cockpitCenter { width:116px; padding:8px; }
+  .cockpit .actionBox,.cockpit .analysisBox { padding:7px 25px 7px 7px; }
+  .cockpit .holdBox,.cockpit .entryTracker { padding:7px 7px 7px 25px; }
+  #entryTrackerButton { font-size:11px; padding:8px; }
+  .entryTrackerFoot { display:none; }
+  #entryTrackerDetail { font-size:9px; }
+  #entryTrackerState { font-size:10px; }
+  .aiReadHeadline { font-size:10px; }
+  .aiReadMeta,.aiReadNote { font-size:8px; }
+}
+@media (orientation:landscape) and (max-height:600px) {
+  .dashboard { grid-template-areas:"header header" "status status" "arena arena" "cockpit cockpit" "cards cards" "warning warning"; }
+  .cockpit { min-height:150px; grid-template-columns:minmax(0,1fr) 126px minmax(0,1fr); gap:4px 0; }
+  .cockpitCenter { width:126px; padding:8px; }
+  .cockpit .actionBox,.cockpit .analysisBox { padding:5px 26px 5px 7px; }
+  .cockpit .holdBox,.cockpit .entryTracker { padding:5px 7px 5px 26px; }
+  #entryTrackerButton { font-size:11px; padding:8px; }
+  .entryTrackerFoot { display:none; }
 }
 
 </style>
@@ -5762,6 +5801,11 @@ body { padding: clamp(8px, 1.3vw, 16px); }
 
   <div class="arena">
 
+    <div class="teamOverlay bearOverlay">BEARS</div>
+    <div class="haSideScore bearScore"><div class="scoreTeam">BEARS</div><div class="scoreNumber">${String(bearHARun).padStart(2, "0")}</div><div class="scoreLabel">HA RUN</div></div>
+    <div class="haSideScore bullScore"><div class="scoreTeam">BULLS</div><div class="scoreNumber">${String(bullHARun).padStart(2, "0")}</div><div class="scoreLabel">HA RUN</div></div>
+    <div class="teamOverlay bullOverlay">BULLS</div>
+
     <div class="teams">
 
       <div class="bears">
@@ -5806,18 +5850,36 @@ body { padding: clamp(8px, 1.3vw, 16px); }
   </div>
 
 
-  <div class="actionBox">
-
-<div class="action">
-  ${dashboardSignal.title}
-</div> 
-
-    <div class="phase">
-      ${dashboardSignal.detail} · ${battlePhase}
+  <div class="cockpit">
+    <div class="actionBox">
+      <div class="action">${dashboardSignal.title}</div>
+      <div class="phase">${dashboardSignal.detail} · ${battlePhase}</div>
     </div>
 
-  </div>
+    <div class="aiReadBox holdBox">
+      <div class="aiReadTitle">TREND HOLD MODE</div>
+      <div class="aiReadHeadline">${hold.regime} · ${hold.stage === "HOLD" ? "REGIME INTACT" : hold.stage}</div>
+      <div class="aiReadNote">${hold.reason}</div>
+    </div>
 
+    <div class="aiReadBox analysisBox">
+      <div class="aiReadTitle">AI READ</div>
+      <div class="aiReadHeadline">${aiRead.headline}</div>
+      <div class="aiReadMeta">${aiRead.alignment} · DAILY ${dailyBias.bias} · ${dailyBias.confirmation}</div>
+      <div class="aiReadNote">${aiRead.note}</div>
+    </div>
+
+    <div class="entryTracker" aria-live="polite">
+      <div class="entryTrackerTitle">MY ENTRY TRACKER · GOOGL</div>
+      <div id="entryTrackerState">Checking live price and direction…</div>
+      <div id="entryTrackerDetail"></div>
+      <div class="entryTrackerFoot">GOOGL marker only. Tracks the stock move from your marked entry; no option P&amp;L or orders.</div>
+    </div>
+
+    <div class="cockpitCenter">
+      <button id="entryTrackerButton" type="button" disabled>MARK ENTRY</button>
+    </div>
+  </div>
 
   <div class="cards">
 
@@ -5851,46 +5913,11 @@ body { padding: clamp(8px, 1.3vw, 16px); }
     </div>
 
 
-    <div class="card">
-      <div class="label">
-        HA RUN
-      </div>
-      <div class="value">
-        ${battle.haRunColor || "NONE"}
-        ${battle.haRunCandles ?? 0}
-      </div>
+    <div class="card candleMiniCard">
+      <div class="label">2-MIN CANDLE</div>
+      <div class="value"><span id="candleCountdown">--:--</span> <span id="candleMove">WAITING</span></div>
     </div>
 
-  </div>
-
-  <div class="entryTracker" aria-live="polite">
-    <div class="entryTrackerTitle">MY ENTRY TRACKER · GOOGL</div>
-    <div id="entryTrackerState">Checking live price and direction…</div>
-    <div id="entryTrackerDetail"></div>
-    <button id="entryTrackerButton" type="button" disabled>MARK ENTRY</button>
-    <div class="entryTrackerFoot">GOOGL marker only. Best move uses prices observed while this page is open; no option P&amp;L or orders.</div>
-  </div>
-
-  <div class="aiReadBox holdBox">
-    <div class="aiReadTitle">TREND HOLD MODE</div>
-    <div class="aiReadHeadline">${hold.regime} · ${hold.stage === "HOLD" ? "REGIME INTACT" : hold.stage}</div>
-    <div class="aiReadNote">${hold.reason}</div>
-  </div>
-
-  <div class="aiReadBox analysisBox">
-    <div class="aiReadTitle">AI READ</div>
-    <div class="aiReadHeadline">${aiRead.headline}</div>
-    <div class="aiReadMeta">
-      ${aiRead.alignment} · DAILY ${dailyBias.bias} · ${dailyBias.confirmation}
-    </div>
-    <div class="aiReadNote">${aiRead.note}</div>
-  </div>
-
-
-  <div class="candleClock">
-    <div class="candleClockLabel">LIVE 2-MIN CANDLE</div>
-    <div id="candleClockTime" class="candleClockTime">--:--</div>
-    <div id="candleClockMove" class="candleClockMove">—</div>
   </div>
 
   <div class="warning">
@@ -5927,28 +5954,20 @@ body { padding: clamp(8px, 1.3vw, 16px); }
 
 <script>
 const candleClockData = ${JSON.stringify(candleClockData)};
-const candleClockTime = document.getElementById("candleClockTime");
-const candleClockMove = document.getElementById("candleClockMove");
-
-function updateCandleClock() {
-  if (!candleClockData.time || !Number.isFinite(candleClockData.open) || !Number.isFinite(candleClockData.close)) {
-    candleClockTime.textContent = "--:--";
-    candleClockMove.textContent = "WAITING";
-    candleClockMove.className = "candleClockMove clockFlat";
-    return;
-  }
+const candleCountdown = document.getElementById("candleCountdown");
+const candleMove = document.getElementById("candleMove");
+function refreshCandleClock() {
   const start = Date.parse(candleClockData.time);
-  const end = start + 120000;
-  const remaining = Math.max(0, Math.ceil((end - Date.now()) / 1000));
-  const minutes = Math.floor(remaining / 60);
-  const seconds = remaining % 60;
-  candleClockTime.textContent = String(minutes).padStart(2,"0") + ":" + String(seconds).padStart(2,"0");
+  if (!Number.isFinite(start) || !Number.isFinite(candleClockData.open) || !Number.isFinite(candleClockData.close)) {
+    candleCountdown.textContent = "--:--"; candleMove.textContent = "WAITING"; candleMove.className = ""; return;
+  }
+  const secondsLeft = Math.max(0, Math.ceil((start + 120000 - Date.now()) / 1000));
+  candleCountdown.textContent = String(Math.floor(secondsLeft/60)).padStart(2,"0") + ":" + String(secondsLeft%60).padStart(2,"0");
   const move = candleClockData.close - candleClockData.open;
-  candleClockMove.textContent = (move > 0 ? "+" : move < 0 ? "−" : "") + "$" + Math.abs(move).toFixed(2);
-  candleClockMove.className = "candleClockMove " + (move > 0 ? "clockUp" : move < 0 ? "clockDown" : "clockFlat");
+  candleMove.textContent = (move > 0 ? "+" : move < 0 ? "−" : "") + "$" + Math.abs(move).toFixed(2);
+  candleMove.className = move > 0 ? "up" : move < 0 ? "down" : "";
 }
-updateCandleClock();
-setInterval(updateCandleClock, 250);
+refreshCandleClock(); setInterval(refreshCandleClock,250);
 
 // The tracker is local to this browser; it does not place, close, or detect orders.
 const trackerKey = "bvb-googl-manual-entry-v1";
