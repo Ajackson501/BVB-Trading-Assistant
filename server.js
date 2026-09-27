@@ -4962,6 +4962,8 @@ const markDirection =
   regularHours && battleAction === "PUT_ENTRY_READY" && hold.direction !== "BULL" ? "PUT" :
   regularHours && hold.stage === "HOLD" && hold.direction === "BULL" && battleControl === "BULLS" ? "CALL" :
   regularHours && hold.stage === "HOLD" && hold.direction === "BEAR" && battleControl === "BEARS" ? "PUT" :
+  regularHours && battleControl === "BULLS" && hold.direction !== "BEAR" ? "CALL" :
+  regularHours && battleControl === "BEARS" && hold.direction !== "BULL" ? "PUT" :
   "NONE";
 const entryTrackerData = {
   direction: markDirection,
@@ -5646,6 +5648,86 @@ body { padding: clamp(8px, 1.3vw, 16px); }
   .warning { padding: 4px; font-size: 10px; }
 }
 
+
+/* =========================================
+   V2.2 COCKPIT DASHBOARD UPGRADE
+   Central round entry control + contoured readout panels
+   ========================================= */
+.battleScore {
+  position:absolute; left:50%; top:4px; transform:translateX(-50%); z-index:10;
+  min-width:118px; padding:5px 12px 6px; border:2px solid #6d7785; border-radius:7px;
+  background:#080d13; text-align:center; box-shadow:inset 0 0 12px rgba(255,255,255,.04),0 3px 10px rgba(0,0,0,.45);
+}
+.battleScoreLabel { font-size:8px; letter-spacing:1.6px; color:#7f8a99; }
+.battleScoreValue { margin-top:1px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:18px; font-weight:900; letter-spacing:2px; color:#f3c969; }
+.teamOverlay { position:absolute; top:7px; z-index:9; font-size:clamp(15px,2.1vw,24px); font-weight:1000; letter-spacing:1px; text-shadow:0 2px 5px #000,0 0 10px #000; }
+.teamOverlay.bearOverlay { left:5%; color:#ff6570; }
+.teamOverlay.bullOverlay { right:5%; color:#62efa5; }
+.arena .teams { display:none; }
+
+.cockpit {
+  grid-area: cockpit; position:relative; display:grid;
+  grid-template-columns:minmax(0,1fr) clamp(132px,17vw,188px) minmax(0,1fr);
+  grid-template-areas:"action center hold" "analysis center tracker";
+  gap:8px 0; align-items:stretch; min-height:205px; margin-top:0;
+}
+.cockpit .actionBox { grid-area:action; }
+.cockpit .holdBox { grid-area:hold; }
+.cockpit .analysisBox { grid-area:analysis; }
+.cockpit .entryTracker { grid-area:tracker; }
+.cockpit .actionBox,.cockpit .holdBox,.cockpit .analysisBox,.cockpit .entryTracker {
+  margin:0; min-width:0; display:flex; flex-direction:column; justify-content:center;
+  background:linear-gradient(180deg,#151d28,#0e141d); border:1px solid #303b49;
+}
+.cockpit .actionBox,.cockpit .analysisBox { border-radius:16px 0 0 16px; padding-right:34px; }
+.cockpit .holdBox,.cockpit .entryTracker { border-radius:0 16px 16px 0; padding-left:34px; }
+.cockpitCenter {
+  grid-area:center; z-index:5; align-self:center; justify-self:center; width:clamp(132px,17vw,188px);
+  aspect-ratio:1; border-radius:50%; padding:10px; background:radial-gradient(circle at 50% 40%,#2a3441 0 44%,#10161e 45% 63%,#596473 64% 67%,#090d12 68%);
+  box-shadow:0 0 0 5px #080c12,0 0 0 7px #27313e,0 12px 28px rgba(0,0,0,.6);
+  display:flex; align-items:center; justify-content:center;
+}
+#entryTrackerButton {
+  width:100%; height:100%; min-height:0; padding:15px; border-radius:50%; border:3px solid #ffe49b;
+  background:radial-gradient(circle at 50% 35%,#ffe17e,#d8a72d 70%,#9a6f11); color:#11161d;
+  box-shadow:inset 0 3px 7px rgba(255,255,255,.5),inset 0 -6px 12px rgba(79,49,0,.35),0 0 20px rgba(244,201,93,.25);
+  font-size:clamp(12px,1.45vw,18px); line-height:1.15; font-weight:1000; letter-spacing:.04em; cursor:pointer;
+}
+#entryTrackerButton:disabled { opacity:.52; filter:grayscale(.35); cursor:not-allowed; }
+.entryTracker { display:flex !important; text-align:left; }
+.entryTrackerTitle,#entryTrackerState,#entryTrackerDetail,.entryTrackerFoot { margin:0; }
+.entryTrackerTitle { color:#ffdc79; }
+#entryTrackerState { margin-top:4px; }
+#entryTrackerDetail { margin-top:3px; }
+.entryTrackerFoot { margin-top:4px; }
+.dashboard { grid-template-areas:"header header" "status status" "arena arena" "cockpit cockpit" "cards cards" "warning warning"; }
+.actionBox,.entryTracker,.holdBox,.analysisBox { grid-area:unset; }
+
+@media (max-width:700px) and (orientation:portrait) {
+  .dashboard { grid-template-areas:"header" "status" "arena" "cockpit" "cards" "warning"; }
+  .cockpit { grid-template-columns:minmax(0,1fr) 116px minmax(0,1fr); grid-template-areas:"action center hold" "analysis center tracker"; min-height:170px; gap:5px 0; }
+  .cockpitCenter { width:116px; padding:8px; }
+  .cockpit .actionBox,.cockpit .analysisBox { padding:7px 25px 7px 7px; }
+  .cockpit .holdBox,.cockpit .entryTracker { padding:7px 7px 7px 25px; }
+  #entryTrackerButton { font-size:11px; padding:8px; }
+  .entryTrackerFoot { display:none; }
+  #entryTrackerDetail { font-size:9px; }
+  #entryTrackerState { font-size:10px; }
+  .aiReadHeadline { font-size:10px; }
+  .aiReadMeta,.aiReadNote { font-size:8px; }
+  .battleScore { min-width:98px; padding:3px 8px; }
+  .battleScoreValue { font-size:15px; }
+}
+@media (orientation:landscape) and (max-height:600px) {
+  .dashboard { grid-template-areas:"header header" "status status" "arena arena" "cockpit cockpit" "cards cards" "warning warning"; }
+  .cockpit { min-height:150px; grid-template-columns:minmax(0,1fr) 126px minmax(0,1fr); gap:4px 0; }
+  .cockpitCenter { width:126px; padding:8px; }
+  .cockpit .actionBox,.cockpit .analysisBox { padding:5px 26px 5px 7px; }
+  .cockpit .holdBox,.cockpit .entryTracker { padding:5px 7px 5px 26px; }
+  #entryTrackerButton { font-size:11px; padding:8px; }
+  .entryTrackerFoot { display:none; }
+}
+
 </style>
 </head>
 
@@ -5701,6 +5783,10 @@ body { padding: clamp(8px, 1.3vw, 16px); }
 
   <div class="arena">
 
+    <div class="battleScore"><div class="battleScoreLabel">HA RUN</div><div class="battleScoreValue">${battle.haRunColor || "NONE"} ${battle.haRunCandles ?? 0}</div></div>
+    <div class="teamOverlay bearOverlay">BEARS</div>
+    <div class="teamOverlay bullOverlay">BULLS</div>
+
     <div class="teams">
 
       <div class="bears">
@@ -5745,18 +5831,36 @@ body { padding: clamp(8px, 1.3vw, 16px); }
   </div>
 
 
-  <div class="actionBox">
-
-<div class="action">
-  ${dashboardSignal.title}
-</div> 
-
-    <div class="phase">
-      ${dashboardSignal.detail} · ${battlePhase}
+  <div class="cockpit">
+    <div class="actionBox">
+      <div class="action">${dashboardSignal.title}</div>
+      <div class="phase">${dashboardSignal.detail} · ${battlePhase}</div>
     </div>
 
-  </div>
+    <div class="aiReadBox holdBox">
+      <div class="aiReadTitle">TREND HOLD MODE</div>
+      <div class="aiReadHeadline">${hold.regime} · ${hold.stage === "HOLD" ? "REGIME INTACT" : hold.stage}</div>
+      <div class="aiReadNote">${hold.reason}</div>
+    </div>
 
+    <div class="aiReadBox analysisBox">
+      <div class="aiReadTitle">AI READ</div>
+      <div class="aiReadHeadline">${aiRead.headline}</div>
+      <div class="aiReadMeta">${aiRead.alignment} · DAILY ${dailyBias.bias} · ${dailyBias.confirmation}</div>
+      <div class="aiReadNote">${aiRead.note}</div>
+    </div>
+
+    <div class="entryTracker" aria-live="polite">
+      <div class="entryTrackerTitle">MY ENTRY TRACKER · GOOGL</div>
+      <div id="entryTrackerState">Checking live price and direction…</div>
+      <div id="entryTrackerDetail"></div>
+      <div class="entryTrackerFoot">GOOGL marker only. Tracks the stock move from your marked entry; no option P&amp;L or orders.</div>
+    </div>
+
+    <div class="cockpitCenter">
+      <button id="entryTrackerButton" type="button" disabled>MARK ENTRY</button>
+    </div>
+  </div>
 
   <div class="cards">
 
@@ -5801,30 +5905,6 @@ body { padding: clamp(8px, 1.3vw, 16px); }
     </div>
 
   </div>
-
-  <div class="entryTracker" aria-live="polite">
-    <div class="entryTrackerTitle">MY ENTRY TRACKER · GOOGL</div>
-    <div id="entryTrackerState">Checking live price and direction…</div>
-    <div id="entryTrackerDetail"></div>
-    <button id="entryTrackerButton" type="button" disabled>MARK ENTRY</button>
-    <div class="entryTrackerFoot">GOOGL marker only. Best move uses prices observed while this page is open; no option P&amp;L or orders.</div>
-  </div>
-
-  <div class="aiReadBox holdBox">
-    <div class="aiReadTitle">TREND HOLD MODE</div>
-    <div class="aiReadHeadline">${hold.regime} · ${hold.stage === "HOLD" ? "REGIME INTACT" : hold.stage}</div>
-    <div class="aiReadNote">${hold.reason}</div>
-  </div>
-
-  <div class="aiReadBox analysisBox">
-    <div class="aiReadTitle">AI READ</div>
-    <div class="aiReadHeadline">${aiRead.headline}</div>
-    <div class="aiReadMeta">
-      ${aiRead.alignment} · DAILY ${dailyBias.bias} · ${dailyBias.confirmation}
-    </div>
-    <div class="aiReadNote">${aiRead.note}</div>
-  </div>
-
 
   <div class="warning">
 
