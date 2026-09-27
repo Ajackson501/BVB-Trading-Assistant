@@ -2875,12 +2875,12 @@ function buildAIRead(battle, dailyBias) {
     headline = `${control} still control the 2-minute battle, but exhaustion is developing.`;
   } else if (action === "CALL_ENTRY_READY") {
     headline = alignment === "WITH DAILY BIAS"
-      ? "CALL setup is confirmed and aligned with the Daily Bias."
-      : "CALL setup is confirmed intraday, but it is not aligned with the Daily Bias.";
+      ? "Oliver CALL setup detected with Daily Bias alignment. Check its trigger and invalidation."
+      : "Oliver CALL setup detected intraday, counter to or unconfirmed by Daily Bias. Check its trigger and invalidation.";
   } else if (action === "PUT_ENTRY_READY") {
     headline = alignment === "WITH DAILY BIAS"
-      ? "PUT setup is confirmed and aligned with the Daily Bias."
-      : "PUT setup is confirmed intraday, but it is not aligned with the Daily Bias.";
+      ? "Oliver PUT setup detected with Daily Bias alignment. Check its trigger and invalidation."
+      : "Oliver PUT setup detected intraday, counter to or unconfirmed by Daily Bias. Check its trigger and invalidation.";
   } else if (control === "BULLS") {
     headline = alignment === "WITH DAILY BIAS"
       ? `Bulls control the 2-minute trend and are moving with the ${bias.toLowerCase()} Daily Bias.`
@@ -2900,8 +2900,47 @@ function buildAIRead(battle, dailyBias) {
     alignment,
     phase,
     dailyConfirmation: dailyBias?.confirmation || "WAITING",
-    note: "Daily Bias guides trend-hold context; it does not prohibit a valid 2-minute Oliver/BVB signal."
+    note: "A pressure line is an observation, not an entry. Setup triggers require separate confirmation; no position is tracked here."
   };
+}
+
+// Translate engine states into an unambiguous dashboard action hierarchy.
+// This changes display text only; the analyzer's action codes remain intact.
+function getDashboardSignal(battle, regularHours) {
+  const action = battle?.action || "WAIT";
+  const crossed = battle?.entryMarker?.crossed || "NONE";
+  const trigger = Number(battle?.entryPrice);
+  const invalidation = Number(battle?.invalidation);
+  const priceText = Number.isFinite(trigger) && trigger > 0
+    ? `Trigger $${trigger.toFixed(2)}` : "Check Oliver trigger";
+  const riskText = Number.isFinite(invalidation) && invalidation > 0
+    ? ` · invalidation $${invalidation.toFixed(2)}` : "";
+
+  if (!regularHours) return {
+    title: "MARKET CLOSED · NO LIVE ACTION",
+    detail: "Last completed-candle analysis is informational."
+  };
+  if (battle?.changeWatch === "WARNING") return {
+    title: "REVERSAL WARNING · WAIT",
+    detail: "Existing trend is at risk. No new entry from the rope pressure line."
+  };
+  if (battle?.changeWatch === "WATCH") return {
+    title: "TREND WEAKENING · WATCH",
+    detail: "Exhaustion is developing; wait for a fresh confirmed setup."
+  };
+  if (action === "CALL_ENTRY_READY" || action === "PUT_ENTRY_READY") return {
+    title: `${action.startsWith("CALL") ? "CALL" : "PUT"} SETUP DETECTED`,
+    detail: `${priceText}${riskText} · verify trigger before acting.`
+  };
+  if (crossed === "BULL_ENTRY" || crossed === "BEAR_ENTRY") return {
+    title: `${crossed === "BULL_ENTRY" ? "BULL" : "BEAR"} PRESSURE LINE CROSSED · WAIT`,
+    detail: "Rope score reached its marker; Oliver has not authorized an entry setup."
+  };
+  if (battle?.control === "BULLS" || battle?.control === "BEARS") return {
+    title: `${battle.control} CONTROL · NO NEW SETUP`,
+    detail: "Trend observation only. The app does not know whether you hold a position."
+  };
+  return { title: "WAIT · NO SETUP", detail: "Monitoring completed 2-minute candles." };
 }
 
 // --------------------------------------------------
@@ -4903,7 +4942,7 @@ const tugIntensity =
   "tug-waiting";
 
 const battlePhase = battle.phase || "WAIT";
-const battleAction = battle.action || "WAIT";   
+const battleAction = battle.action || "WAIT";
 
 const entryCrossed = 
   battle.entryMarker?.crossed || "NONE";
@@ -4913,6 +4952,8 @@ const marketSession =
 
 const regularHours =
   battle.marketSession?.regularHours ?? false;
+
+const dashboardSignal = getDashboardSignal(battle, regularHours);
 
 const html = `
 <!DOCTYPE html>
@@ -5504,11 +5545,11 @@ and (max-height: 700px) {
       <div class="bullEntry"></div>
 
       <div class="entryText bearText">
-        PUT ENTRY ZONE
+        PUT PRESSURE LINE
       </div>
 
       <div class="entryText bullText">
-        CALL ENTRY ZONE
+        CALL PRESSURE LINE
       </div>
 
       <div class="knot"></div>
@@ -5521,21 +5562,11 @@ and (max-height: 700px) {
   <div class="actionBox">
 
 <div class="action">
-  ${
-    battleAction === "CALL_ENTRY_READY"
-      ? "🔔 CALL ENTRY READY"
-      : battleAction === "PUT_ENTRY_READY"
-      ? "🔔 PUT ENTRY READY"
-      : entryCrossed === "BULL_ENTRY"
-      ? "BULL ENTRY ZONE"
-      : entryCrossed === "BEAR_ENTRY"
-      ? "BEAR ENTRY ZONE"
-      : battleAction
-  }
+  ${dashboardSignal.title}
 </div> 
 
     <div class="phase">
-      ${battlePhase}
+      ${dashboardSignal.detail} · ${battlePhase}
     </div>
 
   </div>
@@ -5587,7 +5618,7 @@ and (max-height: 700px) {
 
   <div class="aiReadBox">
     <div class="aiReadTitle">TREND HOLD MODE</div>
-    <div class="aiReadHeadline">${hold.regime} · ${hold.stage}</div>
+    <div class="aiReadHeadline">${hold.regime} · ${hold.stage === "HOLD" ? "REGIME INTACT" : hold.stage}</div>
     <div class="aiReadNote">${hold.reason}</div>
   </div>
 
@@ -5608,13 +5639,21 @@ and (max-height: 700px) {
 
         ? "🌙 Market closed — analysis is informational until regular trading resumes."
 
-        : battlePhase === "WARNING"
+        : battle.changeWatch === "WARNING"
 
-        ? "🔔 Direction-change conditions developing."
+        ? "⚠️ Reversal warning — wait for confirmation."
+
+        : battle.changeWatch === "WATCH"
+
+        ? "⚠️ Trend weakening — watch for a fresh setup."
+
+        : battleAction === "CALL_ENTRY_READY" || battleAction === "PUT_ENTRY_READY"
+
+        ? "Oliver setup detected — check trigger and invalidation before acting."
 
         : entryCrossed !== "NONE"
 
-        ? "🎯 Tug-of-war entry threshold crossed."
+        ? "Rope pressure line crossed — no entry setup confirmed."
 
         : "Monitoring the battle for a change in control."
     }
