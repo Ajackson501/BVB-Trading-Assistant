@@ -5666,15 +5666,19 @@ body { padding: clamp(8px, 1.3vw, 16px); }
 #candleMove.up { color:#55e69a; }
 #candleMove.down { color:#ff5b67; }
 
+/* V2.4: anchor the BEARS/BULLS labels and HA scoreboards to the battle arena,
+   so they sit nearly flush with the top of the character artwork instead of the page header. */
+.arena { position: relative; }
+
 /* =========================================
    V2.3 COCKPIT DASHBOARD UPGRADE
    Central round entry control + contoured readout panels
    ========================================= */
-.teamOverlay { position:absolute; top:7px; z-index:11; font-size:clamp(15px,2.1vw,24px); font-weight:1000; letter-spacing:1px; text-shadow:0 2px 5px #000,0 0 10px #000; }
+.teamOverlay { position:absolute; top:8px; z-index:11; font-size:clamp(15px,2.1vw,24px); font-weight:1000; letter-spacing:1px; text-shadow:0 2px 5px #000,0 0 10px #000; }
 .teamOverlay.bearOverlay { left:2%; color:#ff6570; }
 .teamOverlay.bullOverlay { right:2%; color:#62efa5; }
 .haSideScore {
-  position:absolute; top:5px; z-index:12; min-width:92px; padding:4px 9px 5px;
+  position:absolute; top:6px; z-index:12; min-width:92px; padding:4px 9px 5px;
   border:2px solid currentColor; border-radius:7px; background:#080d13; text-align:center;
   box-shadow:inset 0 0 10px rgba(255,255,255,.04),0 3px 10px rgba(0,0,0,.45);
 }
