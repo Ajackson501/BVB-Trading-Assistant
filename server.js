@@ -5519,6 +5519,133 @@ and (max-height: 700px) {
   }
 }
 
+/* Keep the full readout visible in one responsive dashboard. */
+body { padding: clamp(8px, 1.3vw, 16px); }
+.dashboard {
+  max-width: 1450px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-areas:
+    "header header"
+    "status status"
+    "arena arena"
+    "action tracker"
+    "cards cards"
+    "hold analysis"
+    "warning warning";
+  gap: clamp(5px, .8vw, 10px);
+  align-content: start;
+}
+.dashboard > * { min-width: 0; margin: 0; }
+.header { grid-area: header; }
+.status { grid-area: status; }
+.arena { grid-area: arena; overflow: hidden; padding: 9px 15px; }
+.actionBox { grid-area: action; }
+.cards { grid-area: cards; margin: 0; }
+.entryTracker { grid-area: tracker; }
+.holdBox { grid-area: hold; }
+.analysisBox { grid-area: analysis; }
+.warning { grid-area: warning; }
+.ropeArea { height: clamp(115px, 17vh, 175px); }
+.tug-character { width: min(38%, 40vh); }
+.rope { left: min(35%, 36vh); right: min(35%, 36vh); }
+.control { font-size: clamp(25px, 3.2vw, 39px); line-height: 1.05; }
+.pressure { margin-top: 1px; }
+.actionBox, .entryTracker, .aiReadBox { padding: 9px 12px; }
+.action { font-size: clamp(17px, 2.2vw, 27px); line-height: 1.15; }
+.phase { font-size: 12px; line-height: 1.25; }
+.entryTracker { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 10px; align-items: center; text-align: left; }
+.entryTrackerTitle, #entryTrackerState, #entryTrackerDetail, .entryTrackerFoot { grid-column: 1; margin: 0; }
+.entryTrackerTitle { font-size: 11px; }
+#entryTrackerState { font-size: 14px; line-height: 1.2; }
+#entryTrackerDetail { font-size: 11px; line-height: 1.25; overflow-wrap: anywhere; }
+.entryTrackerFoot { font-size: 10px; line-height: 1.2; }
+#entryTrackerButton { grid-column: 2; grid-row: 1 / span 4; font-size: 12px; padding: 9px 12px; }
+.card { padding: 7px 9px; }
+.value { font-size: 13px; overflow-wrap: anywhere; }
+.aiReadHeadline { font-size: 13px; line-height: 1.2; }
+.aiReadMeta, .aiReadNote { margin-top: 3px; line-height: 1.2; }
+.warning { padding: 6px 10px; font-size: 11px; }
+
+@media (max-width: 700px) and (orientation: portrait) {
+  body { padding: 7px; }
+  .dashboard {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "header" "status" "arena" "action" "tracker"
+      "cards" "hold" "analysis" "warning";
+    gap: 5px;
+  }
+  .header { gap: 8px; }
+  .title { font-size: 10px; letter-spacing: 1px; }
+  .price { font-size: 22px; }
+  .session { font-size: 10px; }
+  .status { margin: 0; }
+  .control { font-size: clamp(22px, 7vw, 31px); }
+  .pressure { font-size: 12px; }
+  .arena { padding: 7px 9px; border-radius: 12px; }
+  .teams { font-size: 15px; }
+  .ropeArea { height: clamp(105px, 17vh, 135px); }
+  .tug-character { width: min(43%, 40vh); }
+  .rope { left: min(40%, 36vh); right: min(40%, 36vh); }
+  .entryText { font-size: 8px; padding: 4px 5px; }
+  .knot { width: 28px; height: 28px; top: calc(50% - 14px); border-width: 4px; }
+  .actionBox { padding: 7px; }
+  .action { font-size: 17px; }
+  .phase { font-size: 10px; }
+  .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
+  .card { padding: 5px 8px; }
+  .label { font-size: 9px; }
+  .value { font-size: 12px; margin-top: 1px; }
+  .entryTracker { padding: 7px 9px; gap: 2px 7px; }
+  #entryTrackerState { font-size: 12px; }
+  #entryTrackerButton { font-size: 11px; min-height: 42px; padding: 6px 8px; }
+  .aiReadBox { padding: 7px 9px; }
+  .aiReadHeadline { margin-top: 2px; font-size: 12px; }
+  .aiReadMeta, .aiReadNote { font-size: 10px; }
+}
+
+@media (orientation: landscape) and (max-height: 600px) {
+  body { padding: 5px 9px; }
+  .dashboard {
+    grid-template-areas:
+      "header header"
+      "status action"
+      "arena tracker"
+      "cards cards"
+      "hold analysis"
+      "warning warning";
+    gap: 4px 7px;
+  }
+  .header { margin: 0; }
+  .title { font-size: 10px; }
+  .price { font-size: 22px; }
+  .status { margin: 0; text-align: left; }
+  .control { font-size: 22px; }
+  .pressure { font-size: 11px; }
+  .arena { padding: 5px 9px; border-radius: 10px; }
+  .teams { font-size: 14px; }
+  .ropeArea { height: clamp(100px, 27vh, 145px); }
+  .tug-character { width: min(43%, 40vh); }
+  .rope { left: min(40%, 36vh); right: min(40%, 36vh); }
+  .entryText { font-size: 8px; padding: 3px 4px; }
+  .knot { width: 26px; height: 26px; top: calc(50% - 13px); border-width: 4px; }
+  .actionBox { padding: 6px; }
+  .action { font-size: 16px; }
+  .phase { font-size: 10px; }
+  .entryTracker { padding: 6px 8px; }
+  .entryTrackerFoot { font-size: 9px; }
+  .cards { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; }
+  .card { padding: 4px 7px; }
+  .label { font-size: 8px; }
+  .value { font-size: 11px; margin-top: 1px; }
+  .aiReadBox { padding: 5px 8px; }
+  .aiReadTitle { font-size: 9px; }
+  .aiReadHeadline { margin-top: 2px; font-size: 11px; }
+  .aiReadMeta, .aiReadNote { font-size: 9px; margin-top: 2px; }
+  .warning { padding: 4px; font-size: 10px; }
+}
+
 </style>
 </head>
 
@@ -5683,13 +5810,13 @@ and (max-height: 700px) {
     <div class="entryTrackerFoot">Manual chart marker. Tracks GOOGL price movement, not your option value or brokerage position.</div>
   </div>
 
-  <div class="aiReadBox">
+  <div class="aiReadBox holdBox">
     <div class="aiReadTitle">TREND HOLD MODE</div>
     <div class="aiReadHeadline">${hold.regime} · ${hold.stage === "HOLD" ? "REGIME INTACT" : hold.stage}</div>
     <div class="aiReadNote">${hold.reason}</div>
   </div>
 
-  <div class="aiReadBox">
+  <div class="aiReadBox analysisBox">
     <div class="aiReadTitle">AI READ</div>
     <div class="aiReadHeadline">${aiRead.headline}</div>
     <div class="aiReadMeta">
