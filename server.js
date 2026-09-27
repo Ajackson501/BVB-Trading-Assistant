@@ -2900,7 +2900,7 @@ function buildAIRead(battle, dailyBias) {
     alignment,
     phase,
     dailyConfirmation: dailyBias?.confirmation || "WAITING",
-    note: "A pressure line is an observation, not an entry. Setup triggers require separate confirmation; no position is tracked here."
+    note: "A pressure line is an observation, not an entry. Setup triggers require separate confirmation; manual entries are tracked only in this browser."
   };
 }
 
@@ -5807,7 +5807,7 @@ body { padding: clamp(8px, 1.3vw, 16px); }
     <div id="entryTrackerState">Checking live price and direction…</div>
     <div id="entryTrackerDetail"></div>
     <button id="entryTrackerButton" type="button" disabled>MARK ENTRY</button>
-    <div class="entryTrackerFoot">Manual chart marker. Tracks GOOGL price movement, not your option value or brokerage position.</div>
+    <div class="entryTrackerFoot">GOOGL marker only. Best move uses prices observed while this page is open; no option P&amp;L or orders.</div>
   </div>
 
   <div class="aiReadBox holdBox">
@@ -5888,6 +5888,16 @@ if (trackedEntry) {
     (trackedEntry.direction === "CALL" ? "BULL" : "BEAR");
   const oppositeAction = trackerData.battleAction ===
     (trackedEntry.direction === "CALL" ? "PUT_ENTRY_READY" : "CALL_ENTRY_READY");
+  const signedMove = freshTrade ?
+    (trackerData.livePrice - Number(trackedEntry.price)) * (trackedEntry.direction === "CALL" ? 1 : -1) : null;
+  const previousBest = Math.max(0, Number(trackedEntry.bestObservedMove) || 0);
+  const bestObservedMove = signedMove === null ? previousBest : Math.max(previousBest, signedMove);
+  const giveback = signedMove === null || bestObservedMove <= 0 ?
+    null : Math.max(0, bestObservedMove - signedMove);
+  if (freshTrade && bestObservedMove > previousBest) {
+    trackedEntry.bestObservedMove = bestObservedMove;
+    try { localStorage.setItem(trackerKey, JSON.stringify(trackedEntry)); } catch (_) {}
+  }
   let verdict = "WAIT FOR FRESH DATA";
   if (trackerData.regularHours && freshTrade && freshCandle) {
     if (trackerData.stage === "REGIME_BROKEN" || oppositeAction ||
@@ -5898,18 +5908,22 @@ if (trackedEntry) {
              (trackerData.holdDirection !== "NONE" && !sameDirection) ||
              (trackerData.battleControl !== "NEUTRAL" && trackerData.battleControl !==
                (trackedEntry.direction === "CALL" ? "BULLS" : "BEARS")))
-      verdict = "WARNING · TREND WEAKENING";
+      verdict = signedMove < 0 ? "WARNING · AGAINST ENTRY" :
+        giveback > 0 ? "WARNING · GIVING BACK MOVE" : "WARNING · TREND WEAKENING";
     else if (sameDirection && trackerData.stage === "HOLD")
-      verdict = "HOLD · TREND INTACT";
+      verdict = signedMove < 0 ? "HOLD · PRICE AGAINST ENTRY" :
+        giveback > 0 ? "HOLD · PULLBACK FROM BEST" : "HOLD · TREND INTACT";
+    else if (signedMove < 0)
+      verdict = "TRACKING · PRICE AGAINST ENTRY";
   }
   trackerState.textContent = trackedEntry.direction + " · " + verdict;
-  const signedMove = freshTrade ?
-    (trackerData.livePrice - Number(trackedEntry.price)) * (trackedEntry.direction === "CALL" ? 1 : -1) : null;
   trackerDetail.textContent = "Marked " + dollars(trackedEntry.price) + " at " +
     new Date(trackedEntry.time).toLocaleString() +
     (signedMove === null ? " · Current price unavailable" :
       " · GOOGL " + dollars(trackerData.livePrice) + " · Directional move " +
-      (signedMove >= 0 ? "+" : "−") + dollars(Math.abs(signedMove)));
+      (signedMove >= 0 ? "+" : "−") + dollars(Math.abs(signedMove)) +
+      (bestObservedMove > 0 ? " · Best observed +" + dollars(bestObservedMove) +
+        " · Given back " + dollars(giveback) : ""));
   trackerButton.textContent = "END TRACKING";
   trackerButton.disabled = false;
   trackerButton.addEventListener("click", () => {
@@ -5928,7 +5942,7 @@ if (trackedEntry) {
   trackerButton.addEventListener("click", () => {
     if (!canMark) return;
     const entry = { symbol: "GOOGL", direction: trackerData.direction,
-      price: trackerData.livePrice, time: trackerData.liveTime };
+      price: trackerData.livePrice, time: trackerData.liveTime, bestObservedMove: 0 };
     try {
       localStorage.setItem(trackerKey, JSON.stringify(entry));
       window.location.reload();
