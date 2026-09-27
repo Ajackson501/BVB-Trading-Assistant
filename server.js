@@ -4955,6 +4955,28 @@ const regularHours =
 
 const dashboardSignal = getDashboardSignal(battle, regularHours);
 
+// A manual mark uses a single inferred direction. If signals disagree,
+// let the user wait for a clear direction instead of guessing.
+const markDirection =
+  regularHours && battleAction === "CALL_ENTRY_READY" && hold.direction !== "BEAR" ? "CALL" :
+  regularHours && battleAction === "PUT_ENTRY_READY" && hold.direction !== "BULL" ? "PUT" :
+  regularHours && hold.stage === "HOLD" && hold.direction === "BULL" && battleControl === "BULLS" ? "CALL" :
+  regularHours && hold.stage === "HOLD" && hold.direction === "BEAR" && battleControl === "BEARS" ? "PUT" :
+  "NONE";
+const entryTrackerData = {
+  direction: markDirection,
+  livePrice: Number(latestGOOGLTrade?.price),
+  liveTime: latestGOOGLTrade?.time || null,
+  candleTime: completedCandles[completedCandles.length - 1]?.time || null,
+  stage: hold.stage,
+  holdDirection: hold.direction,
+  battleControl,
+  battleAction,
+  changeWatch: battle.changeWatch,
+  streamStatus: alpacaStreamStatus,
+  regularHours
+};
+
 const html = `
 <!DOCTYPE html>
 <html>
@@ -4968,6 +4990,17 @@ const html = `
 <title>BVB V2 — Trend Battle</title>
 
 <style>
+
+.entryTracker { margin: 18px 0; padding: 16px; border: 1px solid #d7b356;
+  border-radius: 12px; background: #1b2230; color: #fff; text-align: center; }
+.entryTrackerTitle { font-weight: 800; letter-spacing: .06em; color: #ffdc79; }
+#entryTrackerState { font-size: 1.15rem; font-weight: 800; margin: 8px 0; }
+#entryTrackerDetail { line-height: 1.4; margin: 8px 0; }
+#entryTrackerButton { background: #f4c95d; color: #15191e; font-size: 1rem;
+  font-weight: 800; border: 0; border-radius: 8px; padding: 12px 18px;
+  min-height: 44px; cursor: pointer; }
+#entryTrackerButton:disabled { opacity: .5; cursor: not-allowed; }
+.entryTrackerFoot { font-size: .8rem; opacity: .8; margin-top: 8px; }
 
 * {
   box-sizing: border-box;
@@ -5642,6 +5675,14 @@ and (max-height: 700px) {
 
   </div>
 
+  <div class="entryTracker" aria-live="polite">
+    <div class="entryTrackerTitle">MY ENTRY TRACKER · GOOGL</div>
+    <div id="entryTrackerState">Checking live price and direction…</div>
+    <div id="entryTrackerDetail"></div>
+    <button id="entryTrackerButton" type="button" disabled>MARK ENTRY</button>
+    <div class="entryTrackerFoot">Manual chart marker. Tracks GOOGL price movement, not your option value or brokerage position.</div>
+  </div>
+
   <div class="aiReadBox">
     <div class="aiReadTitle">TREND HOLD MODE</div>
     <div class="aiReadHeadline">${hold.regime} · ${hold.stage === "HOLD" ? "REGIME INTACT" : hold.stage}</div>
@@ -5689,15 +5730,87 @@ and (max-height: 700px) {
 </div>
 
 
+
 <script>
+// The tracker is local to this browser; it does not place, close, or detect orders.
+const trackerKey = "bvb-googl-manual-entry-v1";
+const trackerData = ${JSON.stringify(entryTrackerData)};
+const trackerState = document.getElementById("entryTrackerState");
+const trackerDetail = document.getElementById("entryTrackerDetail");
+const trackerButton = document.getElementById("entryTrackerButton");
+let trackedEntry = null;
+try {
+  const saved = JSON.parse(localStorage.getItem(trackerKey) || "null");
+  if (saved && (saved.direction === "CALL" || saved.direction === "PUT") &&
+      Number.isFinite(Number(saved.price)) && Number(saved.price) > 0 &&
+      Number.isFinite(Date.parse(saved.time))) trackedEntry = saved;
+} catch (_) { /* Browser storage may be disabled. */ }
 
-setTimeout(
-  () => {
-    window.location.reload();
-  },
-  10000
-);
+const liveAge = Date.now() - Date.parse(trackerData.liveTime);
+const freshTrade = trackerData.streamStatus === "connected" &&
+  Number.isFinite(trackerData.livePrice) && trackerData.livePrice > 0 &&
+  Number.isFinite(liveAge) && liveAge >= -10000 && liveAge < 30000;
+const freshCandle = Number.isFinite(Date.parse(trackerData.candleTime)) &&
+  Date.now() - Date.parse(trackerData.candleTime) < 6 * 60 * 1000;
+const canMark = trackerData.regularHours && freshTrade && freshCandle &&
+  trackerData.direction !== "NONE";
+const dollars = value => "$" + Number(value).toFixed(2);
 
+if (trackedEntry) {
+  const sameDirection = trackerData.holdDirection ===
+    (trackedEntry.direction === "CALL" ? "BULL" : "BEAR");
+  const oppositeAction = trackerData.battleAction ===
+    (trackedEntry.direction === "CALL" ? "PUT_ENTRY_READY" : "CALL_ENTRY_READY");
+  let verdict = "WAIT FOR FRESH DATA";
+  if (trackerData.regularHours && freshTrade && freshCandle) {
+    if (trackerData.stage === "REGIME_BROKEN" || oppositeAction ||
+        (trackerData.stage === "HOLD" && trackerData.holdDirection !== "NONE" && !sameDirection))
+      verdict = "EXIT SIGNAL · REVIEW POSITION";
+    else if (trackerData.changeWatch === "WARNING" || trackerData.changeWatch === "WATCH" ||
+             trackerData.stage === "WARNING" ||
+             (trackerData.holdDirection !== "NONE" && !sameDirection) ||
+             (trackerData.battleControl !== "NEUTRAL" && trackerData.battleControl !==
+               (trackedEntry.direction === "CALL" ? "BULLS" : "BEARS")))
+      verdict = "WARNING · TREND WEAKENING";
+    else if (sameDirection && trackerData.stage === "HOLD")
+      verdict = "HOLD · TREND INTACT";
+  }
+  trackerState.textContent = trackedEntry.direction + " · " + verdict;
+  const signedMove = freshTrade ?
+    (trackerData.livePrice - Number(trackedEntry.price)) * (trackedEntry.direction === "CALL" ? 1 : -1) : null;
+  trackerDetail.textContent = "Marked " + dollars(trackedEntry.price) + " at " +
+    new Date(trackedEntry.time).toLocaleString() +
+    (signedMove === null ? " · Current price unavailable" :
+      " · GOOGL " + dollars(trackerData.livePrice) + " · Directional move " +
+      (signedMove >= 0 ? "+" : "−") + dollars(Math.abs(signedMove)));
+  trackerButton.textContent = "END TRACKING";
+  trackerButton.disabled = false;
+  trackerButton.addEventListener("click", () => {
+    if (confirm("End tracking this entry? This does not close your trade.")) {
+      localStorage.removeItem(trackerKey);
+      window.location.reload();
+    }
+  });
+} else {
+  trackerState.textContent = canMark ?
+    "Ready to mark " + trackerData.direction + " at " + dollars(trackerData.livePrice) :
+    "WAIT · Entry direction or live price unavailable";
+  trackerDetail.textContent = "The button marks your actual entry only after you place the trade.";
+  trackerButton.textContent = canMark ? "MARK ENTRY · " + trackerData.direction : "MARK ENTRY";
+  trackerButton.disabled = !canMark;
+  trackerButton.addEventListener("click", () => {
+    if (!canMark) return;
+    const entry = { symbol: "GOOGL", direction: trackerData.direction,
+      price: trackerData.livePrice, time: trackerData.liveTime };
+    try {
+      localStorage.setItem(trackerKey, JSON.stringify(entry));
+      window.location.reload();
+    } catch (_) {
+      trackerState.textContent = "Could not save entry in this browser.";
+    }
+  });
+}
+setTimeout(() => window.location.reload(), 10000);
 </script>
 
 </body>
