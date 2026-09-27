@@ -9,8 +9,8 @@ app.use(express.json());
 // Only expose the two dashboard image assets.
 // Do NOT expose the whole application directory with express.static(__dirname),
 // because that can make source/config files directly downloadable.
-app.get("/BEARS.PNG", (req, res) => res.sendFile(path.join(__dirname, "BEARS.PNG")));
-app.get("/BULLS.PNG", (req, res) => res.sendFile(path.join(__dirname, "BULLS.PNG")));
+app.get("/BEARS.jpeg", (req, res) => res.sendFile(path.join(__dirname, "BEARS.jpeg")));
+app.get("/BULLS.jpeg", (req, res) => res.sendFile(path.join(__dirname, "BULLS.jpeg")));
 
 const PORT = process.env.PORT || 10000;
 
@@ -5069,16 +5069,18 @@ body {
 
 .ropeArea {
   position: relative;
-  height: 110px;
+  height: clamp(145px, 21vw, 230px);
   margin-top: 5px;
 }
 
 .rope {
   position: absolute;
-  left: 5%;
-  right: 5%;
-  top: 52px;
-  height: 10px;
+  left: 40%;
+  right: 40%;
+  top: 50%;
+  height: 9px;
+  transform: translateY(-50%);
+  z-index: 2;
   border-radius: 10px;
   background:
     repeating-linear-gradient(
@@ -5095,10 +5097,11 @@ body {
 .centerLine {
   position: absolute;
   left: 50%;
-  top: 22px;
-  height: 70px;
+  top: calc(50% - 32px);
+  height: 64px;
   width: 2px;
   background: #7c8796;
+  z-index: 7;
 }
 
 .centerLabel {
@@ -5108,6 +5111,7 @@ body {
   transform: translateX(-50%);
   color: #7f8a99;
   font-size: 11px;
+  z-index: 7;
 }
 
 /* ENTRY MARKERS */
@@ -5115,27 +5119,30 @@ body {
 .bearEntry {
   position: absolute;
   left: 32.5%;
-  top: 28px;
+  top: calc(50% - 30px);
   height: 60px;
   width: 2px;
   background: #ff5b67;
+  z-index: 7;
 }
 
 .bullEntry {
   position: absolute;
   left: 67.5%;
-  top: 28px;
+  top: calc(50% - 30px);
   height: 60px;
   width: 2px;
   background: #55e69a;
+  z-index: 7;
 }
 
 .entryText {
   position: absolute;
-  top: 90px;
+  top: calc(50% + 35px);
   transform: translateX(-50%);
   font-size: 10px;
   white-space: nowrap;
+  z-index: 7;
 }
 
 .bearText {
@@ -5153,7 +5160,7 @@ body {
 .knot {
   position: absolute;
   left: ${ropePercent}%;
-  top: 38px;
+  top: calc(50% - 19px);
 
   width: 38px;
   height: 38px;
@@ -5167,6 +5174,7 @@ body {
 
   box-shadow:
     0 0 12px rgba(255,255,255,.35);
+  z-index: 8;
 
   transition:
     left 0.8s ease;
@@ -5329,7 +5337,7 @@ body {
   }
 
   .ropeArea {
-    height: 105px;
+    height: 145px;
   }
 }
 
@@ -5357,7 +5365,7 @@ and (max-height: 700px) {
   }
 
   .ropeArea {
-    height: 100px;
+    height: 145px;
   }
 
   .actionBox {
@@ -5381,44 +5389,55 @@ and (max-height: 700px) {
 
 .tug-character {
   position: absolute;
-  bottom: 28px;
-  width: 150px;
-  height: auto;
-  z-index: 5;
+  top: 50%;
+  width: 44%;
+  z-index: 3;
   filter: drop-shadow(0 8px 10px rgba(0,0,0,.45));
 }
 
 .tug-bear {
-  left: 20px;
-  animation: bearPull 1.4s ease-in-out infinite;
+  left: 0;
+  transform: translateY(-45%);
 }
 
 .tug-bull {
-  right: 20px;
+  right: 0;
+  transform: translateY(-43%);
+}
+
+.tug-character img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* The painted rope fades into the drawn center segment. */
+.tug-bear img {
+  mask-image: linear-gradient(to right, #000 0%, #000 86%, transparent 100%);
+  animation: bearPull 1.4s ease-in-out infinite;
+}
+.tug-bull img {
+  mask-image: linear-gradient(to left, #000 0%, #000 86%, transparent 100%);
   animation: bullPull 1.4s ease-in-out infinite;
 }
 /* Tug-of-war intensity */
 
-.tug-waiting .tug-bear,
-.tug-waiting .tug-bull {
+.tug-waiting .tug-character img {
   animation-duration: 2.4s;
   opacity: 0.75;
 }
 
-.tug-early .tug-bear,
-.tug-early .tug-bull {
+.tug-early .tug-character img {
   animation-duration: 1.8s;
   opacity: 0.9;
 }
 
-.tug-building .tug-bear,
-.tug-building .tug-bull {
+.tug-building .tug-character img {
   animation-duration: 1.1s;
   opacity: 1;
 }
 
-.tug-confirmed .tug-bear,
-.tug-confirmed .tug-bull {
+.tug-confirmed .tug-character img {
   animation-duration: 0.65s;
   opacity: 1;
 }
@@ -5528,9 +5547,8 @@ and (max-height: 700px) {
 
 
     <div class="ropeArea ${tugIntensity}" style="transform: translateX(${tugShift}px);">
-    <img src="/BEARS.PNG" class="tug-character tug-bear" alt="Bear">
-
-    <img src="/BULLS.PNG" class="tug-character tug-bull" alt="Bull">
+    <div class="tug-character tug-bear"><img src="/BEARS.jpeg" alt="Bear pulling the rope"></div>
+    <div class="tug-character tug-bull"><img src="/BULLS.jpeg" alt="Bull pulling the rope"></div>
     
       <div class="centerLabel">
         NEUTRAL
