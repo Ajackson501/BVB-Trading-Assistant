@@ -5140,19 +5140,27 @@ body {
   position: absolute;
   top: calc(50% + 35px);
   transform: translateX(-50%);
-  font-size: 10px;
+  padding: 5px 9px;
+  border-radius: 7px;
+  background: rgba(10, 15, 23, 0.94);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
   white-space: nowrap;
   z-index: 7;
 }
 
 .bearText {
   left: 32.5%;
-  color: #ff7b84;
+  color: #ff8790;
+  border: 1px solid rgba(255, 91, 103, 0.8);
 }
 
 .bullText {
   left: 67.5%;
-  color: #6bf0a9;
+  color: #80ffc0;
+  border: 1px solid rgba(85, 230, 154, 0.8);
 }
 
 /* KNOT */
