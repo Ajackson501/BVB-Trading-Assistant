@@ -93,6 +93,65 @@ let historySeeded = false;
 let dailyCandles = [];
 let dailyHistorySeeded = false;
 
+// Trend Hold is an observational state, never an order or position tracker.
+let trendHold = { regime: "WAIT", stage: "WAIT", direction: "NONE", counterBars: 0, analyzedCandle: null, reason: "Waiting for completed candles." };
+
+function updateTrendHold(candles, battle) {
+  const last = candles[candles.length - 1];
+  if (!last || trendHold.analyzedCandle === last.time) return trendHold;
+  if (candles.length < 201) {
+    trendHold = { regime: "WAIT", stage: "WAIT", direction: "NONE", counterBars: 0, analyzedCandle: last.time, reason: "Need 201 completed 2-minute candles for the 200 SMA slope." };
+    return trendHold;
+  }
+
+  const close = Number(last.close);
+  const sma20 = calculateSMA(candles, 20);
+  const sma200 = calculateSMA(candles, 200);
+  const previous200 = calculatePreviousSMA(candles, 200);
+  const daily = analyzeDailyBias(dailyCandles);
+  const bullBase = close > sma20 && close > sma200 && sma20 > sma200 && sma200 > previous200;
+  const bearBase = close < sma20 && close < sma200 && sma20 < sma200 && sma200 < previous200;
+  const candidate = bullBase && daily.bias === "BULLISH" ? "BULL" :
+    bearBase && daily.bias === "BEARISH" ? "BEAR" : "NONE";
+  const old = trendHold;
+  const opposite = old.direction === "BULL" ? "BEAR" : "BULL";
+  const haAgainst = old.direction === "BULL" ? battle.haColor === "RED" : battle.haColor === "GREEN";
+  const controlAgainst = old.direction === "BULL" ? battle.control === "BEARS" : battle.control === "BULLS";
+  const lost20 = old.direction === "BULL" ? close < sma20 : close > sma20;
+  const warning = old.direction !== "NONE" && (battle.changeWatch === "WARNING" || (haAgainst && controlAgainst) || candidate === opposite || (candidate === "NONE" && lost20));
+  let direction = old.direction;
+  let counterBars = warning ? old.counterBars + 1 : 0;
+  let stage = "WAIT";
+  let reason = "Daily and 2-minute regimes have not aligned.";
+
+  if (direction === "NONE" && candidate !== "NONE") {
+    direction = candidate;
+    stage = "HOLD";
+    reason = "Daily bias and 2-minute 20/200 structure align.";
+  } else if (direction !== "NONE") {
+    const broken = counterBars >= 2 && candidate === opposite;
+    if (broken) {
+      stage = "REGIME_BROKEN";
+      reason = "Opposite daily and 2-minute 20/200 regime confirmed on two completed candles.";
+      direction = "NONE"; // A new regime must establish on a subsequent candle.
+      counterBars = 0;
+    } else if (counterBars >= 2 && candidate === "NONE") {
+      stage = "REGIME_BROKEN";
+      reason = "Original 20/200 regime lost with two consecutive reversal warnings.";
+      direction = "NONE";
+      counterBars = 0;
+    } else if (warning) {
+      stage = "WARNING";
+      reason = "Reversal evidence appeared; waiting for a second completed candle and regime confirmation.";
+    } else {
+      stage = "HOLD";
+      reason = candidate === direction ? "Daily and 2-minute regime remain aligned." : "Regime is mixed; no confirmed reversal.";
+    }
+  }
+  trendHold = { regime: direction === "NONE" ? "NEUTRAL" : `${direction}_REGIME`, stage, direction, counterBars, analyzedCandle: last.time, reason };
+  return trendHold;
+}
+
 
 // ==================================================
 // WEBSOCKET STATE
@@ -202,6 +261,7 @@ function addCompletedCandle(candle) {
 const trendAnalysis = analyzeTrendBattle(completedCandles);
 
 if (trendAnalysis) {
+  updateTrendHold(completedCandles, trendAnalysis);
   recordTrendEvent(trendAnalysis);
 }
 }
@@ -323,6 +383,11 @@ async function seedHistoricalCandles() {
 
     historySeeded = true;
 
+    // The historical bars are context; establish a state from the latest
+    // completed bar once daily history is available, without emitting events.
+    trendHold.analyzedCandle = null;
+    updateTrendHold(completedCandles, analyzeTrendBattle(completedCandles));
+
 
     console.log(
       `Historical seed complete: ${completedCandles.length} candles loaded.`
@@ -410,6 +475,8 @@ async function seedDailyCandles() {
       .slice(-300);
 
     dailyHistorySeeded = dailyCandles.length >= 200;
+    trendHold.analyzedCandle = null;
+    updateTrendHold(completedCandles, analyzeTrendBattle(completedCandles));
 
     console.log(
       `Daily seed complete: ${dailyCandles.length} completed daily candles loaded.`
@@ -4173,7 +4240,8 @@ app.get(
       dailyHistorySeeded,
       completedDailyCandleCount: dailyCandles.length,
       bias: dailyBias,
-      intradayAlignment: buildAIRead(battle, dailyBias)
+      intradayAlignment: buildAIRead(battle, dailyBias),
+      trendHold
     });
   }
 );
@@ -4199,6 +4267,8 @@ app.get(
 
       historySeeded:
         historySeeded,
+
+      trendHold,
 
       completedCandleCount:
         completedCandles.length,
@@ -4815,6 +4885,7 @@ app.get(
 const battle = analyzeTrendBattle(completedCandles);
 const dailyBias = analyzeDailyBias(dailyCandles);
 const aiRead = buildAIRead(battle, dailyBias);
+const hold = trendHold;
 
 const ropePosition = Number(battle.ropePosition || 0);
 const ropePercent = Math.max(0, Math.min(100, 50 + ropePosition / 2));
@@ -5512,6 +5583,12 @@ and (max-height: 700px) {
       </div>
     </div>
 
+  </div>
+
+  <div class="aiReadBox">
+    <div class="aiReadTitle">TREND HOLD MODE</div>
+    <div class="aiReadHeadline">${hold.regime} · ${hold.stage}</div>
+    <div class="aiReadNote">${hold.reason}</div>
   </div>
 
   <div class="aiReadBox">
