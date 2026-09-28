@@ -6376,6 +6376,7 @@ const freshCandle = Number.isFinite(Date.parse(trackerData.candleTime)) &&
   Date.now() - Date.parse(trackerData.candleTime) < 6 * 60 * 1000;
 const canMark = trackerData.regularHours && freshTrade && freshCandle;
 const dollars = value => "$" + Number(value).toFixed(2);
+const cents = value => Math.round(Number(value) * 100);
 function moveText(value) { return (value >= 0 ? "+" : "−") + dollars(Math.abs(value)); }
 
 if (trackedEntry) {
@@ -6383,13 +6384,20 @@ if (trackedEntry) {
     (trackedEntry.direction === "CALL" ? "BULL" : "BEAR");
   const oppositeAction = trackerData.battleAction ===
     (trackedEntry.direction === "CALL" ? "PUT_ENTRY_READY" : "CALL_ENTRY_READY");
-  const signedMove = freshTrade ?
-    (trackerData.livePrice - Number(trackedEntry.price)) * (trackedEntry.direction === "CALL" ? 1 : -1) : null;
-  const previousBest = Math.max(0, Number(trackedEntry.bestObservedMove) || 0);
-  const bestObservedMove = signedMove === null ? previousBest : Math.max(previousBest, signedMove);
-  const giveback = signedMove === null || bestObservedMove <= 0 ?
-    null : Math.max(0, bestObservedMove - signedMove);
-  if (freshTrade && bestObservedMove > previousBest) {
+  // Use displayed stock cents for every move so best - current = given back.
+  // Existing browser markers with fractional prices are rounded on read.
+  const entryCents = cents(trackedEntry.price);
+  const currentCents = freshTrade ? cents(trackerData.livePrice) : null;
+  const rawMoveCents = currentCents === null ? null : currentCents - entryCents;
+  const signedCents = rawMoveCents === null ? null :
+    rawMoveCents * (trackedEntry.direction === "CALL" ? 1 : -1);
+  const previousBestCents = Math.max(0, cents(trackedEntry.bestObservedMove || 0));
+  const bestCents = signedCents === null ? previousBestCents : Math.max(previousBestCents, signedCents);
+  const signedMove = signedCents === null ? null : signedCents / 100;
+  const bestObservedMove = bestCents / 100;
+  const giveback = signedCents === null || bestCents <= 0 ? null :
+    Math.max(0, bestCents - signedCents) / 100;
+  if (freshTrade && bestCents > previousBestCents) {
     trackedEntry.bestObservedMove = bestObservedMove;
     try { localStorage.setItem(trackerKey, JSON.stringify(trackedEntry)); } catch (_) {}
   }
@@ -6415,7 +6423,7 @@ if (trackedEntry) {
   trackerDetail.textContent = "Marked " + dollars(trackedEntry.price) + " at " +
     new Date(trackedEntry.time).toLocaleString() +
     (signedMove === null ? " · Current price unavailable" :
-      " · GOOGL " + dollars(trackerData.livePrice) + " · Directional move " +
+      " · GOOGL " + dollars(currentCents / 100) + " · Directional move " +
       moveText(signedMove) +
       (bestObservedMove > 0 ? " · Best observed +" + dollars(bestObservedMove) +
         " · Given back " + dollars(giveback) : ""));
@@ -6427,7 +6435,7 @@ if (trackedEntry) {
   gaugeEntry.hidden = false;
   gaugeStatus.textContent = trackedEntry.direction + " marked at " + dollars(trackedEntry.price);
   if (freshTrade) {
-    const rawMove = trackerData.livePrice - Number(trackedEntry.price);
+    const rawMove = rawMoveCents / 100;
     // The visual scale is +/- $2 of GOOGL stock movement; exact amounts stay in text.
     const displayPercent = Math.max(7, Math.min(93, 50 + rawMove * 21.5));
     gaugeCurrent.style.left = displayPercent + "%";
@@ -6477,7 +6485,7 @@ if (trackedEntry) {
       return;
     }
     const entry = { symbol: "GOOGL", direction: direction,
-      price: trackerData.livePrice, time: new Date().toISOString(),
+      price: cents(trackerData.livePrice) / 100, time: new Date().toISOString(),
       sourceTime: trackerData.liveTime, bestObservedMove: 0 };
     try {
       localStorage.setItem(trackerKey, JSON.stringify(entry));
