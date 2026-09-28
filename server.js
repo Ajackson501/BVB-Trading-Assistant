@@ -407,59 +407,63 @@ let trendHold = { regime: "WAIT", stage: "WAIT", direction: "NONE", counterBars:
 function updateTrendHold(candles, battle) {
   const last = candles[candles.length - 1];
   if (!last || trendHold.analyzedCandle === last.time) return trendHold;
-  if (candles.length < 201) {
-    trendHold = { regime: "WAIT", stage: "WAIT", direction: "NONE", counterBars: 0, analyzedCandle: last.time, reason: "Need 201 completed 2-minute candles for the 200 SMA slope." };
+  if (candles.length < 21) {
+    trendHold = { regime: "WAIT", stage: "WAIT", direction: "NONE", counterBars: 0,
+      analyzedCandle: last.time, reason: "Need 21 completed 2-minute candles for 8/20 trend health." };
     return trendHold;
   }
 
   const close = Number(last.close);
+  const sma8 = calculateSMA(candles, 8);
   const sma20 = calculateSMA(candles, 20);
-  const sma200 = calculateSMA(candles, 200);
-  const previous200 = calculatePreviousSMA(candles, 200);
-  const daily = analyzeDailyBias(dailyCandles);
-  const bullBase = close > sma20 && close > sma200 && sma20 > sma200 && sma200 > previous200;
-  const bearBase = close < sma20 && close < sma200 && sma20 < sma200 && sma200 < previous200;
-  const candidate = bullBase && daily.bias === "BULLISH" ? "BULL" :
-    bearBase && daily.bias === "BEARISH" ? "BEAR" : "NONE";
+  const prev8 = calculatePreviousSMA(candles, 8);
+  const prev20 = calculatePreviousSMA(candles, 20);
+  const sma200 = candles.length >= 200 ? calculateSMA(candles, 200) : null;
+  const bullCore = close > sma8 && sma8 > sma20 && sma8 >= prev8 && sma20 >= prev20;
+  const bearCore = close < sma8 && sma8 < sma20 && sma8 <= prev8 && sma20 <= prev20;
+  const candidate = bullCore ? "BULL" : bearCore ? "BEAR" : "NONE";
   const old = trendHold;
-  const opposite = old.direction === "BULL" ? "BEAR" : "BULL";
-  const haAgainst = old.direction === "BULL" ? battle.haColor === "RED" : battle.haColor === "GREEN";
-  const controlAgainst = old.direction === "BULL" ? battle.control === "BEARS" : battle.control === "BULLS";
-  const lost20 = old.direction === "BULL" ? close < sma20 : close > sma20;
-  const warning = old.direction !== "NONE" && (battle.changeWatch === "WARNING" || (haAgainst && controlAgainst) || candidate === opposite || (candidate === "NONE" && lost20));
-  let direction = old.direction;
-  let counterBars = warning ? old.counterBars + 1 : 0;
-  let stage = "WAIT";
-  let reason = "Daily and 2-minute regimes have not aligned.";
 
-  if (direction === "NONE" && candidate !== "NONE") {
-    direction = candidate;
-    stage = "HOLD";
-    reason = "Daily bias and 2-minute 20/200 structure align.";
-  } else if (direction !== "NONE") {
-    const broken = counterBars >= 2 && candidate === opposite;
-    if (broken) {
+  let direction = old.direction;
+  if (direction === "NONE" && candidate !== "NONE") direction = candidate;
+
+  const againstControl = direction === "BULL" ? battle.control === "BEARS" : direction === "BEAR" ? battle.control === "BULLS" : false;
+  const againstHA = direction === "BULL" ? battle.haColor === "RED" : direction === "BEAR" ? battle.haColor === "GREEN" : false;
+  const lost8 = direction === "BULL" ? close < sma8 : direction === "BEAR" ? close > sma8 : false;
+  const lost20 = direction === "BULL" ? close < sma20 : direction === "BEAR" ? close > sma20 : false;
+  const oppositeCore = direction === "BULL" ? bearCore : direction === "BEAR" ? bullCore : false;
+  const warningEvidence = [againstControl, againstHA, lost8, battle.changeWatch === "WATCH" || battle.changeWatch === "WARNING"].filter(Boolean).length;
+  const brokenEvidence = [oppositeCore, lost20, againstControl, battle.changeWatch === "WARNING"].filter(Boolean).length;
+
+  let counterBars = (direction !== "NONE" && brokenEvidence >= 2) ? old.counterBars + 1 : 0;
+  let stage = "WAIT";
+  let reason = "Waiting for a directional 8/20 two-minute trend.";
+
+  if (direction !== "NONE") {
+    if (counterBars >= 2 || (oppositeCore && lost20 && againstControl)) {
       stage = "REGIME_BROKEN";
-      reason = "Opposite daily and 2-minute 20/200 regime confirmed on two completed candles.";
-      direction = "NONE"; // A new regime must establish on a subsequent candle.
-      counterBars = 0;
-    } else if (counterBars >= 2 && candidate === "NONE") {
-      stage = "REGIME_BROKEN";
-      reason = "Original 20/200 regime lost with two consecutive reversal warnings.";
+      reason = "Two-minute trend structure has broken: opposing 8/20/price evidence persisted with opposing control.";
       direction = "NONE";
       counterBars = 0;
-    } else if (warning) {
+    } else if (brokenEvidence >= 2 || warningEvidence >= 2) {
       stage = "WARNING";
-      reason = "Reversal evidence appeared; waiting for a second completed candle and regime confirmation.";
+      reason = "Two-minute trend is weakening; opposing structure/control evidence is developing.";
     } else {
       stage = "HOLD";
-      reason = candidate === direction ? "Daily and 2-minute regime remain aligned." : "Regime is mixed; no confirmed reversal.";
+      const longContext = Number.isFinite(sma200)
+        ? (direction === "BULL" ? (close >= sma200 ? " Price is above the 200 SMA." : " Price is below the 200 SMA.")
+                              : (close <= sma200 ? " Price is below the 200 SMA." : " Price is above the 200 SMA."))
+        : " 200 SMA context is still building.";
+      reason = `Two-minute 8/20 trend remains intact.${longContext}`;
     }
   }
-  trendHold = { regime: direction === "NONE" ? "NEUTRAL" : `${direction}_REGIME`, stage, direction, counterBars, analyzedCandle: last.time, reason };
+
+  trendHold = { regime: direction === "NONE" ? "NEUTRAL" : `${direction}_TREND`, stage, direction,
+    counterBars, analyzedCandle: last.time, reason,
+    sma8: Number(sma8.toFixed(4)), sma20: Number(sma20.toFixed(4)),
+    sma200: Number.isFinite(sma200) ? Number(sma200.toFixed(4)) : null };
   return trendHold;
 }
-
 
 // ==================================================
 // WEBSOCKET STATE
@@ -744,11 +748,11 @@ async function seedDailyCandles() {
   }
 
   try {
-    console.log("Seeding completed daily GOOGL history from Alpaca...");
+    console.log("Seeding five completed daily GOOGL candles from Alpaca...");
 
     const end = new Date();
     const start = new Date();
-    start.setUTCDate(start.getUTCDate() - 450);
+    start.setUTCDate(start.getUTCDate() - 30);
 
     const params = new URLSearchParams({
       timeframe: "1Day",
@@ -784,9 +788,9 @@ async function seedDailyCandles() {
       .map(normalizeBar)
       .filter((bar) => newYorkDateKey(bar.time) !== todayET)
       .sort((a, b) => new Date(a.time) - new Date(b.time))
-      .slice(-300);
+      .slice(-5);
 
-    dailyHistorySeeded = dailyCandles.length >= 200;
+    dailyHistorySeeded = dailyCandles.length >= 5;
     trendHold.analyzedCandle = null;
     updateTrendHold(completedCandles, analyzeTrendBattle(completedCandles));
 
@@ -3065,106 +3069,61 @@ function getHABodyMomentum(
 // --------------------------------------------------
 
 function analyzeDailyBias(candles) {
-  if (!Array.isArray(candles) || candles.length < 200) {
+  if (!Array.isArray(candles) || candles.length < 5) {
     return {
-      bias: "BUILDING",
-      arrow: "…",
-      confirmed: false,
-      confirmation: "WAITING_FOR_200_DAILY_BARS",
-      reason: `Need ${Math.max(0, 200 - (candles?.length || 0))} more completed daily candles.`,
+      bias: "BUILDING", arrow: "…", confirmed: false,
+      confirmation: "WAITING_FOR_5_DAILY_BARS",
+      reason: `Need ${Math.max(0, 5 - (candles?.length || 0))} more completed daily candles.`,
       completedCandles: Array.isArray(candles) ? candles.length : 0
     };
   }
 
-  // Working Daily Bias uses roughly the most recent 3 months (~63 trading days).
-  // Full history is retained only so the 200 SMA can remain long-term context.
-  const workingDaily = candles.slice(-63);
-  const current = workingDaily[workingDaily.length - 1];
+  // 5-DAY / 1-WEEK BIAS: context only. Exactly the five most recent
+  // completed 1-day candles determine the working higher-timeframe view.
+  const week = candles.slice(-5);
+  const first = week[0];
+  const current = week[week.length - 1];
+  const firstClose = Number(first.close);
   const price = Number(current.close);
-  const sma8 = calculateSMA(candles, 8);
-  const sma20 = calculateSMA(candles, 20);
-  const sma200 = calculateSMA(candles, 200);
-  const previousSMA8 = calculatePreviousSMA(candles, 8);
-  const previousSMA20 = calculatePreviousSMA(candles, 20);
-  const previousSMA200 = candles.length >= 201
-    ? calculatePreviousSMA(candles, 200)
-    : null;
-
-  const slope = (now, before) => {
-    if (!Number.isFinite(now) || !Number.isFinite(before)) return "UNAVAILABLE";
-    if (now > before) return "RISING";
-    if (now < before) return "FALLING";
-    return "FLAT";
-  };
-
-  const sma8Direction = slope(sma8, previousSMA8);
-  const sma20Direction = slope(sma20, previousSMA20);
-  const sma200Direction = slope(sma200, previousSMA200);
-  const structure = detectStructure(workingDaily);
-  const ha = buildHeikinAshi(workingDaily);
+  const net = price - firstClose;
+  const netPct = firstClose ? (net / firstClose) * 100 : 0;
+  let upDays = 0, downDays = 0;
+  for (let i = 1; i < week.length; i++) {
+    const d = Number(week[i].close) - Number(week[i - 1].close);
+    if (d > 0) upDays++;
+    else if (d < 0) downDays++;
+  }
+  const ha = buildHeikinAshi(week);
   const currentHA = ha[ha.length - 1];
   const haRun = getHARun(ha);
+  const structure = detectStructure(week);
 
-  // The daily 20 SMA establishes the working regime. Daily HA confirms
-  // trend quality. The 8/200 and structure add context; they do not turn
-  // Daily Bias into an intraday entry trigger.
-  const bullish20Regime = price > sma20 && sma20Direction === "RISING";
-  const bearish20Regime = price < sma20 && sma20Direction === "FALLING";
+  let bias = "TRANSITION", arrow = "↔";
+  if (net > 0 && upDays >= downDays) { bias = "BULLISH"; arrow = "↑"; }
+  else if (net < 0 && downDays >= upDays) { bias = "BEARISH"; arrow = "↓"; }
+
   const bullishHA = currentHA?.color === "GREEN" && !currentHA?.isDoji;
   const bearishHA = currentHA?.color === "RED" && !currentHA?.isDoji;
-
-  let bias = "TRANSITION";
-  let arrow = "↔";
-  let confirmed = false;
-  let confirmation = "MIXED";
-
-  if (bullish20Regime) {
-    bias = "BULLISH";
-    arrow = "↑";
-    confirmed = bullishHA;
-    confirmation = bullishHA ? "HA_CONFIRMED" : "HA_NOT_CONFIRMED";
-  } else if (bearish20Regime) {
-    bias = "BEARISH";
-    arrow = "↓";
-    confirmed = bearishHA;
-    confirmation = bearishHA ? "HA_CONFIRMED" : "HA_NOT_CONFIRMED";
-  }
-
-  const evidence = [];
-  if (price > sma20) evidence.push("Daily price above 20 SMA");
-  if (price < sma20) evidence.push("Daily price below 20 SMA");
-  if (sma20Direction === "RISING") evidence.push("Daily 20 SMA rising");
-  if (sma20Direction === "FALLING") evidence.push("Daily 20 SMA falling");
-  if (price > sma200) evidence.push("Daily price above 200 SMA");
-  if (price < sma200) evidence.push("Daily price below 200 SMA");
-  if (structure === "HH_HL") evidence.push("Daily HH/HL structure");
-  if (structure === "LH_LL") evidence.push("Daily LH/LL structure");
-  if (bullishHA) evidence.push("Daily HA bullish confirmation");
-  if (bearishHA) evidence.push("Daily HA bearish confirmation");
+  const confirmed = (bias === "BULLISH" && bullishHA) || (bias === "BEARISH" && bearishHA);
+  const confirmation = confirmed ? "HA_CONFIRMED" : bias === "TRANSITION" ? "MIXED" : "HA_NOT_CONFIRMED";
+  const evidence = [
+    `5-day net ${net >= 0 ? "+" : ""}${net.toFixed(2)} (${netPct >= 0 ? "+" : ""}${netPct.toFixed(2)}%)`,
+    `${upDays} up day(s) / ${downDays} down day(s)`,
+    `Latest daily HA ${currentHA?.color || "UNKNOWN"}`
+  ];
+  if (structure === "HH_HL") evidence.push("5-day HH/HL structure");
+  if (structure === "LH_LL") evidence.push("5-day LH/LL structure");
 
   return {
-    bias,
-    arrow,
-    confirmed,
-    confirmation,
-    reason:
-      bias === "TRANSITION"
-        ? "3-month daily view is mixed/transitioning. No directional working bias."
-        : `${bias} 3-month daily view; ${confirmed ? "daily Heikin-Ashi confirms." : "daily Heikin-Ashi has not confirmed."} 200 SMA remains long-term context.`,
-    price: Number(price.toFixed(4)),
-    sma8: Number(sma8.toFixed(4)),
-    sma20: Number(sma20.toFixed(4)),
-    sma200: Number(sma200.toFixed(4)),
-    sma8Direction,
-    sma20Direction,
-    sma200Direction,
-    structure,
-    haColor: currentHA?.color || "UNKNOWN",
-    haDoji: Boolean(currentHA?.isDoji),
-    haRunColor: haRun.color,
-    haRunCandles: haRun.count,
-    evidence,
-    analyzedCandle: current.time
+    bias, arrow, confirmed, confirmation,
+    reason: bias === "TRANSITION"
+      ? "Five-day daily-candle view is mixed/transitioning; context only."
+      : `${bias} five-day daily-candle context${confirmed ? "; latest daily Heikin-Ashi confirms." : "; latest daily Heikin-Ashi has not confirmed."}`,
+    price: Number(price.toFixed(4)), firstClose: Number(firstClose.toFixed(4)),
+    net: Number(net.toFixed(4)), netPct: Number(netPct.toFixed(3)),
+    structure, haColor: currentHA?.color || "UNKNOWN", haDoji: Boolean(currentHA?.isDoji),
+    haRunColor: haRun.color, haRunCandles: haRun.count, evidence,
+    analyzedCandle: current.time, completedCandles: week.length
   };
 }
 
@@ -3177,10 +3136,10 @@ function buildMarketReadV2(battle, dailyBias) {
 
   let alignment = "NEUTRAL / TRANSITION";
 
-  if (bias === "BULLISH" && control === "BULLS") alignment = "WITH DAILY BIAS";
-  if (bias === "BEARISH" && control === "BEARS") alignment = "WITH DAILY BIAS";
-  if (bias === "BULLISH" && control === "BEARS") alignment = "COUNTER DAILY BIAS";
-  if (bias === "BEARISH" && control === "BULLS") alignment = "COUNTER DAILY BIAS";
+  if (bias === "BULLISH" && control === "BULLS") alignment = "WITH 5-DAY BIAS";
+  if (bias === "BEARISH" && control === "BEARS") alignment = "WITH 5-DAY BIAS";
+  if (bias === "BULLISH" && control === "BEARS") alignment = "COUNTER 5-DAY BIAS";
+  if (bias === "BEARISH" && control === "BULLS") alignment = "COUNTER 5-DAY BIAS";
 
   let headline = "WAIT — battle is not directional enough yet.";
 
@@ -3189,32 +3148,32 @@ function buildMarketReadV2(battle, dailyBias) {
   } else if (changeWatch === "WATCH") {
     headline = `${control} still control the 2-minute trend, but the move is weakening.`;
   } else if (action === "CALL_ENTRY_READY") {
-    headline = alignment === "WITH DAILY BIAS"
-      ? "Potential CALL trend entry. The short-term move agrees with the daily trend. Check the trigger and invalidation."
-      : "Potential CALL trend entry. The daily trend disagrees or is unconfirmed. Check the trigger and invalidation.";
+    headline = alignment === "WITH 5-DAY BIAS"
+      ? "Potential CALL trend entry. The short-term move agrees with the 5-day context. Check the trigger and invalidation."
+      : "Potential CALL trend entry. The 5-day context disagrees or is unconfirmed. Check the trigger and invalidation.";
   } else if (action === "PUT_ENTRY_READY") {
-    headline = alignment === "WITH DAILY BIAS"
-      ? "Potential PUT trend entry. The short-term move agrees with the daily trend. Check the trigger and invalidation."
-      : "Potential PUT trend entry. The daily trend disagrees or is unconfirmed. Check the trigger and invalidation.";
+    headline = alignment === "WITH 5-DAY BIAS"
+      ? "Potential PUT trend entry. The short-term move agrees with the 5-day context. Check the trigger and invalidation."
+      : "Potential PUT trend entry. The 5-day context disagrees or is unconfirmed. Check the trigger and invalidation.";
   } else if (control === "BULLS") {
-    headline = alignment === "WITH DAILY BIAS"
-      ? `Bulls control the 2-minute trend and are moving with the ${bias.toLowerCase()} daily trend.`
-      : alignment === "COUNTER DAILY BIAS"
-      ? `Bulls control the 2-minute trend, but the move is against the ${bias.toLowerCase()} daily trend.`
-      : "Bulls control the 2-minute trend while the daily trend is still developing.";
+    headline = alignment === "WITH 5-DAY BIAS"
+      ? `Bulls control the 2-minute trend and are moving with the ${bias.toLowerCase()} 5-day context.`
+      : alignment === "COUNTER 5-DAY BIAS"
+      ? `Bulls control the 2-minute trend, but the move is against the ${bias.toLowerCase()} 5-day context.`
+      : "Bulls control the 2-minute trend while the 5-day context is still developing.";
   } else if (control === "BEARS") {
-    headline = alignment === "WITH DAILY BIAS"
-      ? `Bears control the 2-minute trend and are moving with the ${bias.toLowerCase()} daily trend.`
-      : alignment === "COUNTER DAILY BIAS"
-      ? `Bears control the 2-minute trend, but the move is against the ${bias.toLowerCase()} daily trend.`
-      : "Bears control the 2-minute trend while the daily trend is still developing.";
+    headline = alignment === "WITH 5-DAY BIAS"
+      ? `Bears control the 2-minute trend and are moving with the ${bias.toLowerCase()} 5-day context.`
+      : alignment === "COUNTER 5-DAY BIAS"
+      ? `Bears control the 2-minute trend, but the move is against the ${bias.toLowerCase()} 5-day context.`
+      : "Bears control the 2-minute trend while the 5-day context is still developing.";
   }
 
   return {
     headline,
     alignment,
     phase,
-    dailyConfirmation: dailyBias?.confirmation || "WAITING",
+    weekConfirmation: dailyBias?.confirmation || "WAITING",
     note: "Decision sequence: setup → trigger → trend health → deterioration → invalidation. Pressure alone is not an entry."
   };
 }
@@ -3237,7 +3196,7 @@ function getDashboardSignal(battle, regularHours) {
   };
   if (battle?.changeWatch === "WARNING") return {
     title: "REVERSAL WARNING · WAIT",
-    detail: "Existing trend is at risk. No new entry from the rope pressure line."
+    detail: "Existing trend is at risk; wait for a fresh confirmed setup."
   };
   if (battle?.changeWatch === "WATCH") return {
     title: "TREND WEAKENING · WATCH",
@@ -3246,10 +3205,6 @@ function getDashboardSignal(battle, regularHours) {
   if (action === "CALL_ENTRY_READY" || action === "PUT_ENTRY_READY") return {
     title: `POTENTIAL ${action.startsWith("CALL") ? "CALL" : "PUT"} TREND ENTRY`,
     detail: `${priceText}${riskText} · verify trigger before acting.`
-  };
-  if (crossed === "BULL_ENTRY" || crossed === "BEAR_ENTRY") return {
-    title: `${crossed === "BULL_ENTRY" ? "BULL" : "BEAR"} PRESSURE LINE CROSSED · WAIT`,
-    detail: "Rope pressure reached its line; a separate entry setup has not been confirmed."
   };
   if (battle?.control === "BULLS" || battle?.control === "BEARS") return {
     title: `${battle.control} CONTROL · NO NEW SETUP`,
@@ -6102,7 +6057,7 @@ body { padding: clamp(8px, 1.3vw, 16px); }
 .gaugeCurrent::before { content:""; position:absolute; left:50%; top:-22px; transform:translateX(-50%); width:8px; height:20px; border-radius:5px; background:#55b7ff; box-shadow:0 0 10px #42aaff; }
 .gaugeProgress { margin-top:3px; min-height:16px; text-align:center; font-size:11px; font-weight:800; color:#d8bbff; }
 .gaugeProgress.hasGiveback { color:#ff9ba5; }
-.dashboard { grid-template-areas:"header header" "status status" "arena arena" "gauge gauge" "cockpit cockpit" "cards cards" "warning warning"; }
+.dashboard { grid-template-areas:"header header" "status status" "arena arena" "cockpit cockpit" "cards cards" "warning warning"; }
 .cards { grid-template-columns:repeat(2,minmax(0,1fr)); }
 .cockpit { grid-template-columns:minmax(0,1fr) clamp(205px,22vw,275px) minmax(0,1fr); }
 .cockpitCenter { width:clamp(205px,22vw,275px); height:118px; aspect-ratio:auto; border-radius:65px; gap:9px; padding:12px;
@@ -6116,7 +6071,7 @@ body { padding: clamp(8px, 1.3vw, 16px); }
 #activeEntryLabel { color:#f5d884; font-weight:900; font-size:12px; letter-spacing:.04em; text-align:center; }
 [hidden] { display:none !important; }
 @media (max-width:700px) and (orientation:portrait) {
-  .dashboard { grid-template-areas:"header" "status" "arena" "gauge" "cockpit" "cards" "warning"; }
+  .dashboard { grid-template-areas:"header" "status" "arena" "cockpit" "cards" "warning"; }
   .entryGauge { padding:7px 9px; }
   .gaugeHeader,.gaugeEnds { font-size:9px; }
   .cockpit { grid-template-columns:minmax(0,1fr) 124px minmax(0,1fr); }
@@ -6125,7 +6080,7 @@ body { padding: clamp(8px, 1.3vw, 16px); }
   .rope { left:31%; right:31%; }
 }
 @media (orientation:landscape) and (max-height:600px) {
-  .dashboard { grid-template-areas:"header header" "status status" "arena arena" "gauge gauge" "cockpit cockpit" "cards cards" "warning warning"; }
+  .dashboard { grid-template-areas:"header header" "status status" "arena arena" "cockpit cockpit" "cards cards" "warning warning"; }
   .entryGauge { padding:4px 10px; }
   .gaugeTrack { height:49px; }
   .gaugeRope { top:22px; }
@@ -6150,6 +6105,24 @@ body.trade-active .actionBox { opacity:.78; }
 body.trade-active .pressureSupport { opacity:.48; }
 body.trade-active .entryGauge { box-shadow:0 0 0 1px rgba(255,220,121,.22); }
 
+
+/* V3 live-test tuning: the main rope becomes the position tracker after entry. */
+.bearEntry,.bullEntry,.entryText { display:none !important; }
+.positionBest,.positionCurrent { position:absolute; z-index:12; transform:translateX(-50%); transition:left .55s ease; }
+.positionBest { top:43%; width:16px; height:16px; background:#c39cff; border:2px solid #f0e5ff; transform:translate(-50%,-50%) rotate(45deg); box-shadow:0 0 12px #af80ff; }
+.positionBest span { position:absolute; transform:rotate(-45deg); left:-9px; top:18px; color:#d8bbff; font-size:9px; font-weight:1000; }
+.positionCurrent { top:43%; width:12px; height:28px; border-radius:8px; background:#55b7ff; box-shadow:0 0 11px #42aaff; transform:translate(-50%,-50%); }
+.positionCurrent span { position:absolute; left:50%; top:28px; transform:translateX(-50%); color:#73c9ff; font-size:9px; font-weight:1000; white-space:nowrap; }
+.positionGiveback { position:absolute; z-index:7; top:calc(43% - 5px); height:10px; background:rgba(255,103,119,.60); box-shadow:0 0 8px rgba(255,103,119,.5); border-radius:7px; }
+.positionSideLabel { position:absolute; z-index:11; top:57%; font-size:9px; font-weight:900; letter-spacing:.04em; }
+.positionLeft { left:31%; color:#ff8f9a; }
+.positionRight { right:31%; color:#80ffc0; }
+.positionStats { position:absolute; z-index:14; left:50%; bottom:2px; transform:translateX(-50%); width:min(94%,760px); text-align:center; font-size:10px; font-weight:850; color:#f2f5f8; text-shadow:0 1px 3px #000; }
+body.trade-active .centerLabel { color:#f6cd72; font-weight:1000; }
+body.trade-active .centerLine { background:#f6cd72; box-shadow:0 0 8px rgba(246,205,114,.55); }
+body.trade-active .knot { display:none; }
+body.trade-active .pressureSupport { display:none; }
+
 </style>
 </head>
 
@@ -6170,7 +6143,7 @@ body.trade-active .entryGauge { box-shadow:0 0 0 1px rgba(255,220,121,.22); }
     </div>
 
     <div class="session">
-      <div class="dailyBiasLabel">DAILY BIAS · 3-MONTH VIEW</div>
+      <div class="dailyBiasLabel">5-DAY BIAS · 1-DAY CANDLES</div>
       <div class="dailyBiasValue ${dailyBias.bias === "BULLISH" ? "biasBull" : dailyBias.bias === "BEARISH" ? "biasBear" : "biasNeutral"}">
         ${dailyBias.bias === "BULLISH" ? "🟢" : dailyBias.bias === "BEARISH" ? "🔴" : dailyBias.bias === "TRANSITION" ? "🟡" : "⚪"}
         ${dailyBias.bias} ${dailyBias.arrow || ""}
@@ -6189,9 +6162,9 @@ body.trade-active .entryGauge { box-shadow:0 0 0 1px rgba(255,220,121,.22); }
     <div class="control">
       ${
         battleControl === "BULLS"
-          ? "BULLS IN CONTROL"
+          ? "BULLS WINNING LATEST CANDLE"
           : battleControl === "BEARS"
-          ? "BEARS IN CONTROL"
+          ? "BEARS WINNING LATEST CANDLE"
           : "⚖️ BATTLE NEUTRAL"
       }
     </div>
@@ -6225,38 +6198,22 @@ body.trade-active .entryGauge { box-shadow:0 0 0 1px rgba(255,220,121,.22); }
     <div class="tug-character tug-bear"><img src="/BEARS.jpeg" alt="Bear pulling the rope"></div>
     <div class="tug-character tug-bull"><img src="/BULLS.jpeg" alt="Bull pulling the rope"></div>
     
-      <div class="centerLabel">
-        NEUTRAL
-      </div>
-
+      <div class="centerLabel" id="mainCenterLabel">NEUTRAL</div>
       <div class="rope"></div>
-
       <div class="centerLine"></div>
-
-      <div class="bearEntry"></div>
-
-      <div class="bullEntry"></div>
-
-      <div class="entryText bearText">
-        PUT PRESSURE LINE
-      </div>
-
-      <div class="entryText bullText">
-        CALL PRESSURE LINE
-      </div>
-
-      <div class="knot"></div>
+      <div class="knot" id="battleKnot"></div>
+      <div class="positionBest" id="positionBest" hidden><span>BEST</span></div>
+      <div class="positionCurrent" id="positionCurrent" hidden><span>CURRENT</span></div>
+      <div class="positionGiveback" id="positionGiveback" hidden></div>
+      <div class="positionSideLabel positionLeft" id="positionLeftLabel" hidden></div>
+      <div class="positionSideLabel positionRight" id="positionRightLabel" hidden></div>
+      <div class="positionStats" id="positionStats" hidden></div>
 
     </div>
 
   </div>
 
-  <div class="entryGauge" aria-label="Stock price movement since your marked entry">
-    <div class="gaugeHeader"><span>MY ENTRY • GOOGL STOCK MOVE</span><span id="gaugeStatus">Mark a CALL or PUT after your trade</span></div>
-    <div class="gaugeTrack"><div class="gaugeRope"></div><div class="gaugeGiveback" id="gaugeGiveback" hidden></div><div class="gaugeBest" id="gaugeBest" hidden title="Best favorable stock move observed"></div><div class="gaugeEntry" id="gaugeEntry" hidden>ENTRY</div><div class="gaugeCurrent" id="gaugeCurrent" hidden>CURRENT</div></div>
-    <div class="gaugeEnds"><span>STOCK DOWN</span><span id="gaugeMove">Waiting for entry</span><span>STOCK UP</span></div>
-    <div class="gaugeProgress" id="gaugeProgress">The rope will show your best observed move and any amount given back.</div>
-  </div>
+
 
 
   <div class="cockpit">
@@ -6267,14 +6224,14 @@ body.trade-active .entryGauge { box-shadow:0 0 0 1px rgba(255,220,121,.22); }
 
     <div class="aiReadBox holdBox">
       <div class="aiReadTitle">TREND HOLD MODE</div>
-      <div class="aiReadHeadline">${hold.regime} · ${hold.stage === "HOLD" ? "REGIME INTACT" : hold.stage}</div>
+      <div class="aiReadHeadline">${hold.direction === "BULL" ? "BULLISH" : hold.direction === "BEAR" ? "BEARISH" : "NEUTRAL"} · ${hold.stage === "HOLD" ? "TREND INTACT" : hold.stage === "WARNING" ? "TREND WEAKENING" : hold.stage === "REGIME_BROKEN" ? "TREND BROKEN / REVERSING" : "WAIT"}</div>
       <div class="aiReadNote">${hold.reason}</div>
     </div>
 
     <div class="aiReadBox analysisBox">
       <div class="aiReadTitle">MARKET READ V2</div>
       <div class="aiReadHeadline" id="marketReadHeadline">${aiRead.headline}</div>
-      <div class="aiReadMeta" id="marketReadMeta">${aiRead.alignment === "WITH DAILY BIAS" ? "With the daily trend" : aiRead.alignment === "COUNTER DAILY BIAS" ? "Against the daily trend" : "Daily trend still developing"} · Daily view: ${dailyBias.bias.toLowerCase()}</div>
+      <div class="aiReadMeta" id="marketReadMeta">${aiRead.alignment === "WITH 5-DAY BIAS" ? "With the 5-day context" : aiRead.alignment === "COUNTER 5-DAY BIAS" ? "Against the 5-day context" : "5-day context still developing"} · 5-day view: ${dailyBias.bias.toLowerCase()}</div>
       <div class="aiReadNote" id="marketReadNote">${aiRead.note}</div>
     </div>
 
@@ -6295,9 +6252,9 @@ body.trade-active .entryGauge { box-shadow:0 0 0 1px rgba(255,220,121,.22); }
 
   <div class="cards">
 
-    <div class="card pressureSupport">
-      <div class="label">PRESSURE · SUPPORTING</div>
-      <div class="value">${battlePressure}</div>
+    <div class="card contextSupport">
+      <div class="label">5-DAY CONTEXT · 1-DAY CANDLES</div>
+      <div class="value">${dailyBias.bias} ${dailyBias.arrow || ""}</div>
     </div>
 
 
@@ -6326,10 +6283,6 @@ body.trade-active .entryGauge { box-shadow:0 0 0 1px rgba(255,220,121,.22); }
         : battleAction === "CALL_ENTRY_READY" || battleAction === "PUT_ENTRY_READY"
 
         ? "Potential trend entry — check the trigger and invalidation before acting."
-
-        : entryCrossed !== "NONE"
-
-        ? "Rope pressure line crossed — no entry setup confirmed."
 
         : "Monitoring the battle for a change in control."
     }
@@ -6370,13 +6323,14 @@ const trackerDetail = document.getElementById("entryTrackerDetail");
 const callButton = document.getElementById("markCallButton");
 const putButton = document.getElementById("markPutButton");
 const endButton = document.getElementById("endTrackingButton");
-const gaugeEntry = document.getElementById("gaugeEntry");
-const gaugeCurrent = document.getElementById("gaugeCurrent");
-const gaugeBest = document.getElementById("gaugeBest");
-const gaugeGiveback = document.getElementById("gaugeGiveback");
-const gaugeProgress = document.getElementById("gaugeProgress");
-const gaugeMove = document.getElementById("gaugeMove");
-const gaugeStatus = document.getElementById("gaugeStatus");
+const mainCenterLabel = document.getElementById("mainCenterLabel");
+const battleKnot = document.getElementById("battleKnot");
+const positionCurrent = document.getElementById("positionCurrent");
+const positionBest = document.getElementById("positionBest");
+const positionGiveback = document.getElementById("positionGiveback");
+const positionStats = document.getElementById("positionStats");
+const positionLeftLabel = document.getElementById("positionLeftLabel");
+const positionRightLabel = document.getElementById("positionRightLabel");
 const marketReadHeadline = document.getElementById("marketReadHeadline");
 const marketReadMeta = document.getElementById("marketReadMeta");
 const marketReadNote = document.getElementById("marketReadNote");
@@ -6421,103 +6375,98 @@ if (trackedEntry) {
     trackedEntry.bestObservedMove = bestObservedMove;
     try { localStorage.setItem(trackerKey, JSON.stringify(trackedEntry)); } catch (_) {}
   }
+  const favorableSide = trackedEntry.direction === "CALL" ? "BULLS" : "BEARS";
+  const opposingSide = trackedEntry.direction === "CALL" ? "BEARS" : "BULLS";
+  const favorableControl = trackerData.battleControl === favorableSide;
+  const opposingControl = trackerData.battleControl === opposingSide;
+  const givebackRatio = bestObservedMove > 0 && giveback !== null ? giveback / bestObservedMove : 0;
+  const opposingEvidence = [
+    opposingControl,
+    trackerData.stage === "WARNING" || trackerData.stage === "REGIME_BROKEN",
+    trackerData.holdDirection !== "NONE" && !sameDirection,
+    trackerData.changeWatch === "WARNING",
+    oppositeAction
+  ].filter(Boolean).length;
+
   let verdict = "WAIT FOR FRESH DATA";
   if (trackerData.regularHours && freshTrade && freshCandle) {
     if (trackerData.stage === "REGIME_BROKEN" || oppositeAction ||
-        (trackerData.stage === "HOLD" && trackerData.holdDirection !== "NONE" && !sameDirection))
-      verdict = "EXIT SIGNAL · REVIEW POSITION";
-    else if (trackerData.changeWatch === "WARNING" || trackerData.changeWatch === "WATCH" ||
-             trackerData.stage === "WARNING" ||
-             (trackerData.holdDirection !== "NONE" && !sameDirection) ||
-             (trackerData.battleControl !== "NEUTRAL" && trackerData.battleControl !==
-               (trackedEntry.direction === "CALL" ? "BULLS" : "BEARS")))
-      verdict = signedMove < 0 ? "WARNING · AGAINST ENTRY" :
-        giveback > 0 ? "WARNING · GIVING BACK MOVE" : "WARNING · TREND WEAKENING";
-    else if (sameDirection && trackerData.stage === "HOLD")
-      verdict = signedMove < 0 ? "HOLD · PRICE AGAINST ENTRY" :
-        giveback > 0 ? "HOLD · PULLBACK FROM BEST" : "HOLD · TREND INTACT";
+        (givebackRatio >= 0.90 && bestObservedMove >= 0.10 && opposingEvidence >= 2))
+      verdict = "EXIT WARNING · REVIEW POSITION";
+    else if (givebackRatio >= 0.75 && bestObservedMove >= 0.10 && opposingEvidence >= 2)
+      verdict = "REVERSAL RISK · PROTECT POSITION";
+    else if (givebackRatio >= 0.55 && bestObservedMove >= 0.10 && opposingEvidence >= 1)
+      verdict = "PROTECT MOVE · DETERIORATION";
+    else if ((givebackRatio >= 0.35 && bestObservedMove >= 0.10) || opposingEvidence >= 2)
+      verdict = "WATCH · PULLBACK / WEAKENING";
+    else if (sameDirection && trackerData.stage === "HOLD" && signedMove >= 0)
+      verdict = giveback > 0 ? "HOLD · NORMAL PULLBACK" : "HOLD · TREND INTACT";
     else if (signedMove < 0)
-      verdict = "TRACKING · PRICE AGAINST ENTRY";
+      verdict = "WATCH · PRICE AGAINST ENTRY";
+    else
+      verdict = "TRACKING · POSITION FAVORABLE";
   }
-  // MARKET READ V2: after entry, shift from setup discovery to trade-health synthesis.
+
   document.body.classList.add("trade-active");
-  const favorableControl = trackerData.battleControl === (trackedEntry.direction === "CALL" ? "BULLS" : "BEARS");
-  const dailyAligned = trackerData.dailyBias === (trackedEntry.direction === "CALL" ? "BULLISH" : "BEARISH");
-  const givebackRatio = bestObservedMove > 0 && giveback !== null ? giveback / bestObservedMove : 0;
-  let health = "TRACKING — waiting for enough evidence.";
-  let healthNote = "Watch the marked trade relative to trend health, not a single candle.";
-  if (verdict.startsWith("EXIT SIGNAL")) {
-    health = trackedEntry.direction + " THESIS INVALIDATED · REVIEW EXIT";
-    healthNote = "Regime break, opposite setup, or hold-direction conflict detected. Review the position rather than treating this as a normal pullback.";
-  } else if (verdict.includes("AGAINST ENTRY")) {
-    health = trackedEntry.direction + " UNDER PRESSURE · PRICE AGAINST ENTRY";
-    healthNote = "Price is unfavorable from your marker. Check whether short-term control and the original trend thesis are still intact.";
-  } else if (verdict.includes("TREND WEAKENING") || trackerData.changeWatch === "WARNING") {
-    health = trackedEntry.direction + " DETERIORATING · PROTECT THE MOVE";
-    healthNote = "Trend evidence is weakening. Giveback and control now matter more than the original setup.";
-  } else if (givebackRatio >= 0.70 && bestObservedMove >= 0.10) {
-    health = trackedEntry.direction + " LARGE GIVEBACK · REVIEW TREND HEALTH";
-    healthNote = "Most of the best favorable stock move has been surrendered. Confirm that this is still a pullback rather than deterioration.";
-  } else if (givebackRatio >= 0.35 && bestObservedMove >= 0.10) {
-    health = trackedEntry.direction + " PULLBACK FROM BEST · WATCH";
-    healthNote = "A meaningful portion of the best move has been given back, but giveback alone is not an exit signal.";
-  } else if (favorableControl && sameDirection && signedMove !== null && signedMove >= 0) {
-    health = trackedEntry.direction + " TREND HEALTHY · HOLD CONDITIONS INTACT";
-    healthNote = "Price, short-term control, and Trend Hold remain aligned with the marked direction.";
-  } else if (signedMove !== null && signedMove >= 0) {
-    health = trackedEntry.direction + " STILL FAVORABLE · MOMENTUM MIXED";
-    healthNote = "The trade remains favorable from entry, but the supporting trend evidence is mixed. Watch for renewed alignment or deterioration.";
-  }
+  const weekAligned = trackerData.dailyBias === (trackedEntry.direction === "CALL" ? "BULLISH" : "BEARISH");
+  let health = trackedEntry.direction + " · " + verdict;
+  let healthNote = "Entry-relative read combines giveback with independent two-minute trend evidence; giveback alone does not force an exit warning.";
+  if (verdict.startsWith("EXIT WARNING"))
+    healthNote = "Severe giveback plus confirming deterioration, a broken two-minute trend, or an opposite setup is present. Review the position.";
+  else if (verdict.startsWith("REVERSAL RISK"))
+    healthNote = "A large portion of the best move has been surrendered while opposing trend evidence is building.";
+  else if (verdict.startsWith("PROTECT MOVE"))
+    healthNote = "The trade remains measurable from entry, but giveback plus opposing evidence now deserves protection attention.";
+  else if (verdict.startsWith("WATCH"))
+    healthNote = "The move is pulling back or weakening. Watch for renewed alignment versus further deterioration.";
+
   marketReadHeadline.textContent = health;
-  marketReadMeta.textContent = (dailyAligned ? "With 3-month daily trend" : "Against/mixed 3-month daily trend") +
-    " · " + trackerData.battleControl + " short-term control" +
-    (bestObservedMove > 0 ? " · Best +" + dollars(bestObservedMove) + " · Giveback " + dollars(giveback || 0) : "");
+  marketReadMeta.textContent = (weekAligned ? "With 5-day context" : "Against/mixed 5-day context") +
+    " · " + trackerData.battleControl + " latest-candle control" +
+    (bestObservedMove > 0 ? " · Best +" + dollars(bestObservedMove) + " · Giveback " + dollars(giveback || 0) +
+      " (" + Math.round(givebackRatio * 100) + "%)" : "");
   marketReadNote.textContent = healthNote;
 
   trackerState.textContent = trackedEntry.direction + " · " + verdict;
-  trackerDetail.textContent = "Marked " + dollars(trackedEntry.price) + " at " +
-    new Date(trackedEntry.time).toLocaleString() +
+  trackerDetail.textContent = "Entry " + dollars(entryCents / 100) +
     (signedMove === null ? " · Current price unavailable" :
-      " · GOOGL " + dollars(currentCents / 100) + " · Directional move " +
-      moveText(signedMove) +
-      (bestObservedMove > 0 ? " · Best observed +" + dollars(bestObservedMove) +
-        " · Given back " + dollars(giveback) : ""));
+      " · Current " + dollars(currentCents / 100) + " · Directional move " + moveText(signedMove) +
+      (bestObservedMove > 0 ? " · Best +" + dollars(bestObservedMove) + " · Giveback " + dollars(giveback) +
+        " (" + Math.round(givebackRatio * 100) + "%)" : ""));
   callButton.hidden = true; putButton.hidden = true; endButton.hidden = false;
   document.getElementById("entryControls").className += " trackingActive";
   const activeEntryLabel = document.getElementById("activeEntryLabel");
   activeEntryLabel.textContent = trackedEntry.direction + " ENTRY ACTIVE";
   activeEntryLabel.hidden = false;
-  gaugeEntry.hidden = false;
-  gaugeStatus.textContent = trackedEntry.direction + " marked at " + dollars(trackedEntry.price);
+  mainCenterLabel.textContent = "ENTRY\n" + dollars(entryCents / 100);
+  positionLeftLabel.textContent = trackedEntry.direction === "PUT" ? "FAVORABLE" : "ADVERSE";
+  positionRightLabel.textContent = trackedEntry.direction === "CALL" ? "FAVORABLE" : "ADVERSE";
+  positionLeftLabel.hidden = false; positionRightLabel.hidden = false;
   if (freshTrade) {
     const rawMove = rawMoveCents / 100;
-    // The visual scale is +/- $2 of GOOGL stock movement; exact amounts stay in text.
-    const displayPercent = Math.max(7, Math.min(93, 50 + rawMove * 21.5));
-    gaugeCurrent.style.left = displayPercent + "%";
-    gaugeCurrent.hidden = false;
-    gaugeMove.textContent = "Stock " + moveText(rawMove) + " · " + trackedEntry.direction + " direction " + moveText(signedMove);
+    // Main rope scale is +/- $2 of GOOGL movement; exact values remain in text.
+    const displayPercent = Math.max(31, Math.min(69, 50 + rawMove * 9.5));
+    positionCurrent.style.left = displayPercent + "%";
+    positionCurrent.hidden = false;
     if (bestObservedMove > 0) {
       const bestRawMove = bestObservedMove * (trackedEntry.direction === "CALL" ? 1 : -1);
-      const bestPercent = Math.max(7, Math.min(93, 50 + bestRawMove * 21.5));
-      gaugeBest.style.left = bestPercent + "%";
-      gaugeBest.title = "Best favorable move observed: +" + dollars(bestObservedMove);
-      gaugeBest.hidden = false;
-      gaugeProgress.textContent = "◆ Best observed +" + dollars(bestObservedMove) + " · Given back " + dollars(giveback);
-      gaugeProgress.className = giveback > 0 ? "gaugeProgress hasGiveback" : "gaugeProgress";
+      const bestPercent = Math.max(31, Math.min(69, 50 + bestRawMove * 9.5));
+      positionBest.style.left = bestPercent + "%";
+      positionBest.hidden = false;
       if (giveback > 0) {
-        gaugeGiveback.style.left = Math.min(bestPercent, displayPercent) + "%";
-        gaugeGiveback.style.width = Math.abs(bestPercent - displayPercent) + "%";
-        gaugeGiveback.title = "Given back " + dollars(giveback) + " from the best observed move";
-        gaugeGiveback.hidden = false;
+        positionGiveback.style.left = Math.min(bestPercent, displayPercent) + "%";
+        positionGiveback.style.width = Math.abs(bestPercent - displayPercent) + "%";
+        positionGiveback.hidden = false;
       }
-    } else {
-      gaugeProgress.textContent = "No favorable move observed yet";
     }
-    if (Math.abs(rawMove) >= 2) gaugeStatus.textContent += " · gauge at limit";
+    positionStats.textContent = trackedEntry.direction + " · Entry " + dollars(entryCents/100) +
+      " · Current " + dollars(currentCents/100) + " · Move " + moveText(signedMove) +
+      " · Best +" + dollars(bestObservedMove) + " · Giveback " + dollars(giveback || 0) +
+      (bestObservedMove > 0 ? " (" + Math.round(givebackRatio*100) + "%)" : "");
+    positionStats.hidden = false;
   } else {
-    gaugeCurrent.hidden = true;
-    gaugeMove.textContent = "Waiting for a fresh stock price";
-    gaugeProgress.textContent = "Best observed move is saved; waiting for a fresh price to measure giveback";
+    positionStats.textContent = "Waiting for a fresh GOOGL price; saved entry and best move are preserved.";
+    positionStats.hidden = false;
   }
   endButton.addEventListener("click", () => {
     if (confirm("End tracking this entry? This does not close your trade.")) {
@@ -6527,7 +6476,7 @@ if (trackedEntry) {
   });
 } else {
   document.body.classList.add("setup-mode");
-  marketReadNote.textContent = "PRE-ENTRY: wait for a qualifying setup and trigger. Pressure-line movement alone is supporting evidence, not authorization to enter.";
+  marketReadNote.textContent = "PRE-ENTRY: wait for a qualifying setup and trigger. The rope shows the immediate Bulls/Bears candle battle; Trend Hold independently tracks the two-minute trend.";
   trackerState.textContent = canMark ?
     "Ready to mark CALL or PUT at " + dollars(trackerData.livePrice) :
     "WAIT · Fresh market price unavailable";
