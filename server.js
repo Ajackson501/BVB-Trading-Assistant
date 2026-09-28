@@ -2,6 +2,7 @@ const express = require("express");
 const WebSocket = require("ws");
 const path = require("path");
 const crypto = require("crypto");
+const fs = require("fs");
 
 const app = express();
 app.use(express.json());
@@ -92,6 +93,313 @@ let historySeeded = false;
 // Oliver/BVB intraday signals.
 let dailyCandles = [];
 let dailyHistorySeeded = false;
+
+
+// ==================================================
+// INDEPENDENT PAPER-TRADING STUDY — OLIVER + AGENT C
+// ==================================================
+// Uses the SAME completed 2-minute GOOGL candles already received by BVB.
+// No additional Alpaca stream or per-agent market-data requests are opened.
+// Dashboard UI is intentionally unchanged.
+//
+// Persistence: set PAPER_JOURNAL_FILE to a path on a Render Persistent Disk
+// (example: /var/data/bvb-paper-study.json) for deploy-safe persistence.
+// Without a persistent disk, the default local file survives ordinary process
+// restarts only while the instance filesystem remains available.
+
+const PAPER_JOURNAL_FILE =
+  process.env.PAPER_JOURNAL_FILE || path.join(__dirname, "bvb-paper-study.json");
+
+const PAPER_STUDY_VERSION = "Oliver-v1.2_vs_AgentC-v1";
+
+let paperStudy = {
+  version: PAPER_STUDY_VERSION,
+  symbol: "GOOGL",
+  timeframe: "2Min",
+  updatedAt: null,
+  agents: {
+    Oliver: { position: null, trades: [], decisions: [] },
+    AgentC: { position: null, trades: [], decisions: [] }
+  }
+};
+
+function loadPaperStudy() {
+  try {
+    if (!fs.existsSync(PAPER_JOURNAL_FILE)) return;
+    const parsed = JSON.parse(fs.readFileSync(PAPER_JOURNAL_FILE, "utf8"));
+    if (parsed?.agents?.Oliver && parsed?.agents?.AgentC) {
+      paperStudy = parsed;
+      paperStudy.version = PAPER_STUDY_VERSION;
+      console.log(`Paper study loaded from ${PAPER_JOURNAL_FILE}`);
+    }
+  } catch (error) {
+    console.error("Unable to load paper study journal:", error.message);
+  }
+}
+
+function savePaperStudy() {
+  try {
+    paperStudy.updatedAt = new Date().toISOString();
+    const directory = path.dirname(PAPER_JOURNAL_FILE);
+    fs.mkdirSync(directory, { recursive: true });
+    const temp = `${PAPER_JOURNAL_FILE}.tmp`;
+    fs.writeFileSync(temp, JSON.stringify(paperStudy, null, 2));
+    fs.renameSync(temp, PAPER_JOURNAL_FILE);
+  } catch (error) {
+    console.error("Unable to save paper study journal:", error.message);
+  }
+}
+
+function studyDateKey(time) {
+  return newYorkDateKey(time);
+}
+
+function regularSessionForCandle(candle) {
+  return getMarketSession(new Date(candle.time)).regularHours;
+}
+
+function recordPaperDecision(agentName, decision) {
+  const agent = paperStudy.agents[agentName];
+  if (!agent) return;
+  agent.decisions.push(decision);
+  if (agent.decisions.length > 2000) agent.decisions = agent.decisions.slice(-2000);
+}
+
+function openPaperPosition(agentName, direction, candle, reason, metadata = {}) {
+  const agent = paperStudy.agents[agentName];
+  if (!agent || agent.position) return false;
+  agent.position = {
+    direction,
+    entryTime: candle.time,
+    entryPrice: Number(candle.close),
+    entryReason: reason,
+    entryMetadata: metadata,
+    bestPrice: Number(candle.close),
+    worstPrice: Number(candle.close),
+    barsHeld: 0
+  };
+  recordPaperDecision(agentName, {
+    time: candle.time, type: "ENTRY", direction,
+    price: Number(candle.close), reason
+  });
+  savePaperStudy();
+  console.log(`${agentName} PAPER ENTRY ${direction} @ ${candle.close} — ${reason}`);
+  return true;
+}
+
+function updatePaperExcursion(position, candle) {
+  position.barsHeld += 1;
+  if (position.direction === "CALL") {
+    position.bestPrice = Math.max(position.bestPrice, Number(candle.high));
+    position.worstPrice = Math.min(position.worstPrice, Number(candle.low));
+  } else {
+    position.bestPrice = Math.min(position.bestPrice, Number(candle.low));
+    position.worstPrice = Math.max(position.worstPrice, Number(candle.high));
+  }
+}
+
+function closePaperPosition(agentName, candle, reason, metadata = {}) {
+  const agent = paperStudy.agents[agentName];
+  if (!agent?.position) return false;
+  const p = agent.position;
+  const exitPrice = Number(candle.close);
+  const signedMove = p.direction === "CALL"
+    ? exitPrice - p.entryPrice
+    : p.entryPrice - exitPrice;
+  const favorableMove = p.direction === "CALL"
+    ? p.bestPrice - p.entryPrice
+    : p.entryPrice - p.bestPrice;
+  const adverseMove = p.direction === "CALL"
+    ? p.worstPrice - p.entryPrice
+    : p.entryPrice - p.worstPrice;
+  const trade = {
+    agent: agentName,
+    direction: p.direction,
+    entryTime: p.entryTime,
+    entryPrice: p.entryPrice,
+    entryReason: p.entryReason,
+    exitTime: candle.time,
+    exitPrice,
+    exitReason: reason,
+    barsHeld: p.barsHeld,
+    underlyingMove: Number(signedMove.toFixed(4)),
+    maxFavorableMove: Number(favorableMove.toFixed(4)),
+    maxAdverseMove: Number(adverseMove.toFixed(4)),
+    result: signedMove > 0 ? "FAVORABLE" : signedMove < 0 ? "UNFAVORABLE" : "FLAT",
+    metadata
+  };
+  agent.trades.push(trade);
+  agent.position = null;
+  recordPaperDecision(agentName, {
+    time: candle.time, type: "EXIT", direction: trade.direction,
+    price: exitPrice, reason, underlyingMove: trade.underlyingMove
+  });
+  savePaperStudy();
+  console.log(`${agentName} PAPER EXIT ${trade.direction} @ ${exitPrice} — ${reason}`);
+  return true;
+}
+
+function analyzeAgentCPaper(candles) {
+  const ha = buildHeikinAshi(candles);
+  if (ha.length < 4) return { signal: "WAIT", reason: "Need more HA candles." };
+  const current = ha[ha.length - 1];
+  const previous = ha[ha.length - 2];
+  const run = getHARun(ha);
+
+  // Agent C V1 study rules use only established HA concepts:
+  // consecutive same-color control + no opposite wick = conviction.
+  // Doji remains OBSERVATIONAL ONLY and never creates an entry or exit.
+  const bullishConviction =
+    current.color === "GREEN" && previous.color === "GREEN" &&
+    run.color === "GREEN" && run.count >= 2 && current.noLowerWick;
+  const bearishConviction =
+    current.color === "RED" && previous.color === "RED" &&
+    run.color === "RED" && run.count >= 2 && current.noUpperWick;
+
+  return {
+    signal: bullishConviction ? "CALL" : bearishConviction ? "PUT" : "WAIT",
+    reason: bullishConviction
+      ? "Consecutive green HA run with no lower wick (buyers in control)."
+      : bearishConviction
+      ? "Consecutive red HA run with no upper wick (sellers in control)."
+      : "No Agent C conviction entry.",
+    haColor: current.color,
+    haDoji: current.isDoji,
+    haRunColor: run.color,
+    haRunCandles: run.count,
+    noLowerWick: current.noLowerWick,
+    noUpperWick: current.noUpperWick
+  };
+}
+
+function runOliverPaperTrader(candles) {
+  if (candles.length < 200) return;
+  const candle = candles[candles.length - 1];
+  if (!regularSessionForCandle(candle)) return;
+  const agent = paperStudy.agents.Oliver;
+  const analysis = analyzeOliver(candles);
+
+  if (agent.position) {
+    updatePaperExcursion(agent.position, candle);
+    const p = agent.position;
+    const invalidated = Number.isFinite(Number(p.entryMetadata?.invalidation)) &&
+      (p.direction === "CALL"
+        ? Number(candle.low) <= Number(p.entryMetadata.invalidation)
+        : Number(candle.high) >= Number(p.entryMetadata.invalidation));
+    const oppositeSetup =
+      (p.direction === "CALL" && analysis.action === "PUT_SETUP") ||
+      (p.direction === "PUT" && analysis.action === "CALL_SETUP");
+    const regimeLost =
+      (p.direction === "CALL" && analysis.regime !== "BULLISH_REGIME") ||
+      (p.direction === "PUT" && analysis.regime !== "BEARISH_REGIME");
+
+    if (invalidated) return closePaperPosition("Oliver", candle, "Oliver invalidation level reached.", { analysis });
+    if (oppositeSetup) return closePaperPosition("Oliver", candle, "Opposite Oliver setup confirmed.", { analysis });
+    if (regimeLost) return closePaperPosition("Oliver", candle, "Oliver 200 SMA regime authorization lost.", { analysis });
+    return;
+  }
+
+  if (analysis.action === "CALL_SETUP") {
+    openPaperPosition("Oliver", "CALL", candle, analysis.reason, {
+      entryEvent: analysis.entryEvent,
+      trigger: analysis.trigger,
+      invalidation: analysis.invalidation,
+      regime: analysis.regime
+    });
+  } else if (analysis.action === "PUT_SETUP") {
+    openPaperPosition("Oliver", "PUT", candle, analysis.reason, {
+      entryEvent: analysis.entryEvent,
+      trigger: analysis.trigger,
+      invalidation: analysis.invalidation,
+      regime: analysis.regime
+    });
+  }
+}
+
+function runAgentCPaperTrader(candles) {
+  if (candles.length < 4) return;
+  const candle = candles[candles.length - 1];
+  if (!regularSessionForCandle(candle)) return;
+  const agent = paperStudy.agents.AgentC;
+  const analysis = analyzeAgentCPaper(candles);
+
+  if (agent.position) {
+    updatePaperExcursion(agent.position, candle);
+    // Dojis are deliberately not exits. Agent C exits only when the
+    // established opposite directional HA control is confirmed.
+    const opposite =
+      (agent.position.direction === "CALL" && analysis.signal === "PUT") ||
+      (agent.position.direction === "PUT" && analysis.signal === "CALL");
+    if (opposite) {
+      const oldDirection = agent.position.direction;
+      closePaperPosition("AgentC", candle, "Opposite Agent C HA conviction confirmed.", { analysis });
+      // Reversal can become the next independent paper position on the same
+      // completed candle because the opposite conviction itself is the signal.
+      openPaperPosition("AgentC", analysis.signal, candle, analysis.reason, analysis);
+      return;
+    }
+    return;
+  }
+
+  if (analysis.signal === "CALL" || analysis.signal === "PUT") {
+    openPaperPosition("AgentC", analysis.signal, candle, analysis.reason, analysis);
+  }
+}
+
+function runIndependentPaperStudy(candles) {
+  try {
+    runOliverPaperTrader(candles);
+    runAgentCPaperTrader(candles);
+  } catch (error) {
+    console.error("Independent paper-study error:", error);
+  }
+}
+
+function closePaperPositionsAtSessionEnd() {
+  const session = getMarketSession(new Date());
+  if (session.regularHours || completedCandles.length === 0) return;
+  const last = completedCandles[completedCandles.length - 1];
+  // Only close positions whose entry day is today ET, and only after 4 PM ET.
+  const nowET = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false
+  }).format(new Date());
+  const [h, m] = nowET.split(":").map(Number);
+  if ((h * 60 + m) < 960) return;
+  for (const name of ["Oliver", "AgentC"]) {
+    const pos = paperStudy.agents[name].position;
+    if (pos && studyDateKey(pos.entryTime) === studyDateKey(new Date())) {
+      closePaperPosition(name, last, "Regular market session ended.");
+    }
+  }
+}
+
+function paperDailySummary(dateKey = studyDateKey(new Date())) {
+  const summarize = (name) => {
+    const agent = paperStudy.agents[name];
+    const trades = agent.trades.filter(t => studyDateKey(t.entryTime) === dateKey);
+    const favorable = trades.filter(t => t.result === "FAVORABLE").length;
+    const unfavorable = trades.filter(t => t.result === "UNFAVORABLE").length;
+    const flat = trades.filter(t => t.result === "FLAT").length;
+    const totalUnderlyingMove = trades.reduce((sum, t) => sum + Number(t.underlyingMove || 0), 0);
+    return {
+      trades: trades.length, favorable, unfavorable, flat,
+      totalUnderlyingMove: Number(totalUnderlyingMove.toFixed(4)),
+      openPosition: agent.position,
+      tradeLog: trades
+    };
+  };
+  return {
+    date: dateKey,
+    symbol: "GOOGL",
+    timeframe: "2Min",
+    note: "Results measure GOOGL underlying movement from paper entry to paper exit; they are not option-contract P/L.",
+    Oliver: summarize("Oliver"),
+    AgentC: summarize("AgentC")
+  };
+}
+
+loadPaperStudy();
+setInterval(closePaperPositionsAtSessionEnd, 60 * 1000);
 
 // Trend Hold is an observational state, never an order or position tracker.
 let trendHold = { regime: "WAIT", stage: "WAIT", direction: "NONE", counterBars: 0, analyzedCandle: null, reason: "Waiting for completed candles." };
@@ -264,6 +572,10 @@ if (trendAnalysis) {
   updateTrendHold(completedCandles, trendAnalysis);
   recordTrendEvent(trendAnalysis);
 }
+
+// Feed the same completed candle to both independent paper traders.
+// This performs local calculations only and does not make another Alpaca request.
+runIndependentPaperStudy(completedCandles);
 }
 
 
@@ -6081,6 +6393,31 @@ setTimeout(() => window.location.reload(), 10000);
   }
 );
 
+
+
+// ==================================================
+// PAPER STUDY JOURNAL / DAILY REPORT
+// Protected by the same BVB event-feed credentials.
+// ==================================================
+
+app.get("/paper-study", authorizeBVBEvents, (req, res) => {
+  res.json({
+    version: paperStudy.version,
+    symbol: paperStudy.symbol,
+    timeframe: paperStudy.timeframe,
+    updatedAt: paperStudy.updatedAt,
+    persistenceFile: PAPER_JOURNAL_FILE,
+    agents: paperStudy.agents
+  });
+});
+
+app.get("/paper-study/daily", authorizeBVBEvents, (req, res) => {
+  const requested = String(req.query.date || "").trim();
+  const dateKey = /^\d{4}-\d{2}-\d{2}$/.test(requested)
+    ? requested
+    : studyDateKey(new Date());
+  res.json(paperDailySummary(dateKey));
+});
 
 // ==================================================
 // START SERVER
