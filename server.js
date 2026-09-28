@@ -5233,6 +5233,47 @@ const regularHours =
 
 const dashboardSignal = getDashboardSignal(battle, regularHours);
 
+// V3.1 — compact 1–5 Bull/Bear strength meter.
+// This is intentionally NOT an entry signal. It blends the last three completed
+// 2-minute candles with the existing multi-factor battle evidence so one candle
+// cannot make the visual flip wildly.
+function buildFiveBoxStrength(candles, battleState) {
+  const recent = Array.isArray(candles) ? candles.slice(-3) : [];
+  let bull = 0;
+  let bear = 0;
+
+  for (const c of recent) {
+    const o = Number(c?.open), h = Number(c?.high), l = Number(c?.low), cl = Number(c?.close);
+    if (![o,h,l,cl].every(Number.isFinite)) continue;
+    const range = Math.max(0.01, h - l);
+    const conviction = Math.min(1, Math.abs(cl - o) / range);
+    if (cl > o) bull += 12 + conviction * 18;
+    else if (cl < o) bear += 12 + conviction * 18;
+    else { bull += 4; bear += 4; }
+  }
+
+  const bullEvidence = Array.isArray(battleState?.bullEvidence) ? battleState.bullEvidence.length : 0;
+  const bearEvidence = Array.isArray(battleState?.bearEvidence) ? battleState.bearEvidence.length : 0;
+  bull += Math.min(30, bullEvidence * 6);
+  bear += Math.min(30, bearEvidence * 6);
+
+  const run = Number(battleState?.haRunCandles || 0);
+  if (battleState?.haRunColor === 'GREEN') bull += Math.min(25, run * 5);
+  if (battleState?.haRunColor === 'RED') bear += Math.min(25, run * 5);
+
+  if (battleState?.control === 'BULLS') bull += 10;
+  if (battleState?.control === 'BEARS') bear += 10;
+
+  const toBoxes = (v) => Math.max(1, Math.min(5, Math.ceil(v / 25)));
+  return { bull: toBoxes(bull), bear: toBoxes(bear) };
+}
+
+const fiveBoxStrength = buildFiveBoxStrength(completedCandles, battle);
+const strengthBoxes = (side, count) =>
+  Array.from({ length: 5 }, (_, i) =>
+    `<span class="strengthBox ${side} ${i < count ? "on" : ""}"></span>`
+  ).join("");
+
 // V2.3 dashboard display data: side-specific HA scoreboards + live 2-minute clock.
 const dashboardHA = buildHeikinAshi(completedCandles);
 const dashboardHARun = getHARun(dashboardHA);
@@ -5965,6 +6006,43 @@ body { padding: clamp(8px, 1.3vw, 16px); }
 .haSideScore .scoreLabel { font-size:7px; letter-spacing:1.3px; opacity:.9; margin-top:2px; }
 .arena .teams { display:none; }
 
+
+/* V3.1 — responsive five-box strength strip under the animation. */
+.strengthMeter {
+  grid-column:1 / -1; display:grid; grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);
+  align-items:center; gap:10px; min-height:34px; padding:5px 12px; margin:0;
+  background:linear-gradient(180deg,#0d141d,#090e14); border:1px solid #293442; border-radius:10px;
+}
+.strengthSide { display:flex; align-items:center; gap:7px; min-width:0; }
+.strengthBear { justify-content:flex-end; }
+.strengthBull { justify-content:flex-start; }
+.strengthName { font-size:10px; font-weight:1000; letter-spacing:1px; }
+.strengthBear .strengthName,.strengthBear .strengthCount { color:#ff6570; }
+.strengthBull .strengthName,.strengthBull .strengthCount { color:#62efa5; }
+.strengthCount { font:900 10px ui-monospace,SFMono-Regular,Menlo,monospace; min-width:23px; }
+.strengthBoxes { display:flex; gap:3px; }
+.strengthBox { width:clamp(12px,2.1vw,24px); height:10px; border-radius:2px; border:1px solid #394553; background:#151d27; opacity:.45; }
+.strengthBox.bear.on { background:#ff5b67; border-color:#ff7b84; opacity:1; box-shadow:0 0 6px rgba(255,91,103,.45); }
+.strengthBox.bull.on { background:#55e69a; border-color:#75efad; opacity:1; box-shadow:0 0 6px rgba(85,230,154,.42); }
+.strengthCaption { color:#9aa7b7; font-size:8px; font-weight:900; letter-spacing:1.2px; white-space:nowrap; }
+@media (max-width:700px) {
+  .strengthMeter { gap:5px; padding:4px 6px; min-height:30px; }
+  .strengthSide { gap:4px; }
+  .strengthBox { width:clamp(9px,3vw,15px); height:8px; gap:2px; }
+  .strengthName { font-size:8px; }
+  .strengthCount { font-size:8px; min-width:18px; }
+  .strengthCaption { font-size:7px; letter-spacing:.7px; }
+}
+@media (max-width:430px) and (orientation:portrait) {
+  .strengthCaption { display:none; }
+  .strengthMeter { grid-template-columns:1fr 1fr; }
+  .strengthBox { width:10px; }
+}
+@media (max-height:500px) and (orientation:landscape) {
+  .strengthMeter { min-height:25px; padding:2px 8px; }
+  .strengthBox { height:7px; }
+}
+
 .cockpit {
   grid-area: cockpit; position:relative; display:grid;
   grid-template-columns:minmax(0,1fr) clamp(132px,17vw,188px) minmax(0,1fr);
@@ -6213,7 +6291,11 @@ body.trade-active .pressureSupport { display:none; }
 
   </div>
 
-
+  <div class="strengthMeter" aria-label="Bull and Bear strength over recent completed 2-minute candles">
+    <div class="strengthSide strengthBear"><span class="strengthName">BEARS</span><div class="strengthBoxes">${strengthBoxes("bear", fiveBoxStrength.bear)}</div><span class="strengthCount">${fiveBoxStrength.bear}/5</span></div>
+    <div class="strengthCaption">2-MIN STRENGTH</div>
+    <div class="strengthSide strengthBull"><span class="strengthCount">${fiveBoxStrength.bull}/5</span><div class="strengthBoxes">${strengthBoxes("bull", fiveBoxStrength.bull)}</div><span class="strengthName">BULLS</span></div>
+  </div>
 
 
   <div class="cockpit">
