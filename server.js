@@ -6080,11 +6080,17 @@ body { padding: clamp(8px, 1.3vw, 16px); }
 .gaugeRope { position:absolute; left:3%; right:3%; top:26px; height:10px; border-radius:9px;
   background:repeating-linear-gradient(45deg,#856143,#856143 7px,#c39764 7px,#c39764 14px);
   box-shadow:0 1px 8px #000; }
+.gaugeGiveback { position:absolute; top:26px; height:10px; background:rgba(255,103,119,.65);
+  box-shadow:0 0 9px rgba(255,103,119,.6); z-index:2; border-radius:8px; }
+.gaugeBest { position:absolute; top:23px; width:15px; height:15px; transform:translateX(-50%) rotate(45deg);
+  background:#c39cff; border:2px solid #eee0ff; box-shadow:0 0 11px #af80ff; z-index:5; }
 .gaugeEntry,.gaugeCurrent { position:absolute; transform:translateX(-50%); font-size:10px; font-weight:900; white-space:nowrap; }
 .gaugeEntry { left:50%; top:0; color:#f6cd72; }
 .gaugeEntry::after { content:""; display:block; width:8px; height:20px; margin:2px auto 0; border-radius:5px; background:#f6cd72; }
 .gaugeCurrent { top:43px; color:#73c9ff; transition:left .6s ease; }
 .gaugeCurrent::before { content:""; position:absolute; left:50%; top:-22px; transform:translateX(-50%); width:8px; height:20px; border-radius:5px; background:#55b7ff; box-shadow:0 0 10px #42aaff; }
+.gaugeProgress { margin-top:3px; min-height:16px; text-align:center; font-size:11px; font-weight:800; color:#d8bbff; }
+.gaugeProgress.hasGiveback { color:#ff9ba5; }
 .dashboard { grid-template-areas:"header header" "status status" "arena arena" "gauge gauge" "cockpit cockpit" "cards cards" "warning warning"; }
 .cards { grid-template-columns:repeat(2,minmax(0,1fr)); }
 .cockpit { grid-template-columns:minmax(0,1fr) clamp(205px,22vw,275px) minmax(0,1fr); }
@@ -6112,6 +6118,8 @@ body { padding: clamp(8px, 1.3vw, 16px); }
   .entryGauge { padding:4px 10px; }
   .gaugeTrack { height:49px; }
   .gaugeRope { top:22px; }
+  .gaugeGiveback { top:22px; }
+  .gaugeBest { top:19px; }
   .gaugeEntry::after { height:16px; }
   .gaugeCurrent { top:34px; }
   .gaugeCurrent::before { top:-18px; height:16px; }
@@ -6224,8 +6232,9 @@ body { padding: clamp(8px, 1.3vw, 16px); }
 
   <div class="entryGauge" aria-label="Stock price movement since your marked entry">
     <div class="gaugeHeader"><span>MY ENTRY • GOOGL STOCK MOVE</span><span id="gaugeStatus">Mark a CALL or PUT after your trade</span></div>
-    <div class="gaugeTrack"><div class="gaugeRope"></div><div class="gaugeEntry" id="gaugeEntry" hidden>ENTRY</div><div class="gaugeCurrent" id="gaugeCurrent" hidden>CURRENT</div></div>
+    <div class="gaugeTrack"><div class="gaugeRope"></div><div class="gaugeGiveback" id="gaugeGiveback" hidden></div><div class="gaugeBest" id="gaugeBest" hidden title="Best favorable stock move observed"></div><div class="gaugeEntry" id="gaugeEntry" hidden>ENTRY</div><div class="gaugeCurrent" id="gaugeCurrent" hidden>CURRENT</div></div>
     <div class="gaugeEnds"><span>STOCK DOWN</span><span id="gaugeMove">Waiting for entry</span><span>STOCK UP</span></div>
+    <div class="gaugeProgress" id="gaugeProgress">The rope will show your best observed move and any amount given back.</div>
   </div>
 
 
@@ -6346,6 +6355,9 @@ const putButton = document.getElementById("markPutButton");
 const endButton = document.getElementById("endTrackingButton");
 const gaugeEntry = document.getElementById("gaugeEntry");
 const gaugeCurrent = document.getElementById("gaugeCurrent");
+const gaugeBest = document.getElementById("gaugeBest");
+const gaugeGiveback = document.getElementById("gaugeGiveback");
+const gaugeProgress = document.getElementById("gaugeProgress");
 const gaugeMove = document.getElementById("gaugeMove");
 const gaugeStatus = document.getElementById("gaugeStatus");
 let trackedEntry = null;
@@ -6421,10 +6433,28 @@ if (trackedEntry) {
     gaugeCurrent.style.left = displayPercent + "%";
     gaugeCurrent.hidden = false;
     gaugeMove.textContent = "Stock " + moveText(rawMove) + " · " + trackedEntry.direction + " direction " + moveText(signedMove);
+    if (bestObservedMove > 0) {
+      const bestRawMove = bestObservedMove * (trackedEntry.direction === "CALL" ? 1 : -1);
+      const bestPercent = Math.max(7, Math.min(93, 50 + bestRawMove * 21.5));
+      gaugeBest.style.left = bestPercent + "%";
+      gaugeBest.title = "Best favorable move observed: +" + dollars(bestObservedMove);
+      gaugeBest.hidden = false;
+      gaugeProgress.textContent = "◆ Best observed +" + dollars(bestObservedMove) + " · Given back " + dollars(giveback);
+      gaugeProgress.className = giveback > 0 ? "gaugeProgress hasGiveback" : "gaugeProgress";
+      if (giveback > 0) {
+        gaugeGiveback.style.left = Math.min(bestPercent, displayPercent) + "%";
+        gaugeGiveback.style.width = Math.abs(bestPercent - displayPercent) + "%";
+        gaugeGiveback.title = "Given back " + dollars(giveback) + " from the best observed move";
+        gaugeGiveback.hidden = false;
+      }
+    } else {
+      gaugeProgress.textContent = "No favorable move observed yet";
+    }
     if (Math.abs(rawMove) >= 2) gaugeStatus.textContent += " · gauge at limit";
   } else {
     gaugeCurrent.hidden = true;
     gaugeMove.textContent = "Waiting for a fresh stock price";
+    gaugeProgress.textContent = "Best observed move is saved; waiting for a fresh price to measure giveback";
   }
   endButton.addEventListener("click", () => {
     if (confirm("End tracking this entry? This does not close your trade.")) {
