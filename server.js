@@ -3182,29 +3182,29 @@ function buildAIRead(battle, dailyBias) {
   let headline = "WAIT — battle is not directional enough yet.";
 
   if (changeWatch === "WARNING") {
-    headline = `${control} control is under reversal warning. Protect the current trend and wait for confirmation.`;
+    headline = `${control} control may be changing. Review your position and wait for confirmation.`;
   } else if (changeWatch === "WATCH") {
-    headline = `${control} still control the 2-minute battle, but exhaustion is developing.`;
+    headline = `${control} still control the 2-minute trend, but the move is weakening.`;
   } else if (action === "CALL_ENTRY_READY") {
     headline = alignment === "WITH DAILY BIAS"
-      ? "Oliver CALL setup detected with Daily Bias alignment. Check its trigger and invalidation."
-      : "Oliver CALL setup detected intraday, counter to or unconfirmed by Daily Bias. Check its trigger and invalidation.";
+      ? "Potential CALL trend entry. The short-term move agrees with the daily trend. Check the trigger and invalidation."
+      : "Potential CALL trend entry. The daily trend disagrees or is unconfirmed. Check the trigger and invalidation.";
   } else if (action === "PUT_ENTRY_READY") {
     headline = alignment === "WITH DAILY BIAS"
-      ? "Oliver PUT setup detected with Daily Bias alignment. Check its trigger and invalidation."
-      : "Oliver PUT setup detected intraday, counter to or unconfirmed by Daily Bias. Check its trigger and invalidation.";
+      ? "Potential PUT trend entry. The short-term move agrees with the daily trend. Check the trigger and invalidation."
+      : "Potential PUT trend entry. The daily trend disagrees or is unconfirmed. Check the trigger and invalidation.";
   } else if (control === "BULLS") {
     headline = alignment === "WITH DAILY BIAS"
-      ? `Bulls control the 2-minute trend and are moving with the ${bias.toLowerCase()} Daily Bias.`
+      ? `Bulls control the 2-minute trend and are moving with the ${bias.toLowerCase()} daily trend.`
       : alignment === "COUNTER DAILY BIAS"
-      ? `Bulls control the 2-minute trend, but the move is counter to the ${bias.toLowerCase()} Daily Bias.`
-      : "Bulls control the 2-minute trend while the Daily Bias is neutral/transitioning.";
+      ? `Bulls control the 2-minute trend, but the move is against the ${bias.toLowerCase()} daily trend.`
+      : "Bulls control the 2-minute trend while the daily trend is still developing.";
   } else if (control === "BEARS") {
     headline = alignment === "WITH DAILY BIAS"
-      ? `Bears control the 2-minute trend and are moving with the ${bias.toLowerCase()} Daily Bias.`
+      ? `Bears control the 2-minute trend and are moving with the ${bias.toLowerCase()} daily trend.`
       : alignment === "COUNTER DAILY BIAS"
-      ? `Bears control the 2-minute trend, but the move is counter to the ${bias.toLowerCase()} Daily Bias.`
-      : "Bears control the 2-minute trend while the Daily Bias is neutral/transitioning.";
+      ? `Bears control the 2-minute trend, but the move is against the ${bias.toLowerCase()} daily trend.`
+      : "Bears control the 2-minute trend while the daily trend is still developing.";
   }
 
   return {
@@ -3224,7 +3224,7 @@ function getDashboardSignal(battle, regularHours) {
   const trigger = Number(battle?.entryPrice);
   const invalidation = Number(battle?.invalidation);
   const priceText = Number.isFinite(trigger) && trigger > 0
-    ? `Trigger $${trigger.toFixed(2)}` : "Check Oliver trigger";
+    ? `Trigger $${trigger.toFixed(2)}` : "Check the entry trigger";
   const riskText = Number.isFinite(invalidation) && invalidation > 0
     ? ` · invalidation $${invalidation.toFixed(2)}` : "";
 
@@ -3241,12 +3241,12 @@ function getDashboardSignal(battle, regularHours) {
     detail: "Exhaustion is developing; wait for a fresh confirmed setup."
   };
   if (action === "CALL_ENTRY_READY" || action === "PUT_ENTRY_READY") return {
-    title: `${action.startsWith("CALL") ? "CALL" : "PUT"} SETUP DETECTED`,
+    title: `POTENTIAL ${action.startsWith("CALL") ? "CALL" : "PUT"} TREND ENTRY`,
     detail: `${priceText}${riskText} · verify trigger before acting.`
   };
   if (crossed === "BULL_ENTRY" || crossed === "BEAR_ENTRY") return {
     title: `${crossed === "BULL_ENTRY" ? "BULL" : "BEAR"} PRESSURE LINE CROSSED · WAIT`,
-    detail: "Rope score reached its marker; Oliver has not authorized an entry setup."
+    detail: "Rope pressure reached its line; a separate entry setup has not been confirmed."
   };
   if (battle?.control === "BULLS" || battle?.control === "BEARS") return {
     title: `${battle.control} CONTROL · NO NEW SETUP`,
@@ -5239,11 +5239,19 @@ const aiRead = buildAIRead(battle, dailyBias);
 const hold = trendHold;
 
 const ropePosition = Number(battle.ropePosition || 0);
-const ropePercent = Math.max(0, Math.min(100, 50 + ropePosition / 2));
-const tugShift = ropePosition * 0.7;
+// Keep the moving knot in the visible rope segment between the characters' hands.
+// The full strength remains available in the Pressure card and analysis data.
+const ropePercent = Math.max(36, Math.min(64, 50 + ropePosition * 0.28));
 
 const battleControl = battle.control || "NEUTRAL";
 const battlePressure = battle.pressure || "WAITING";
+const dashboardStrength = ({
+  BUYERS_STRONG: "Buyers showing strong candle control",
+  BUYERS: "Buyers holding the latest candle",
+  SELLERS_STRONG: "Sellers showing strong candle control",
+  SELLERS: "Sellers holding the latest candle",
+  INDECISION: "Candles show indecision"
+})[battle.haControl] || "Waiting for candle strength";
 
 const tugIntensity =
   battlePressure === "DOMINANT" ? "tug-confirmed" :
@@ -5267,16 +5275,6 @@ const regularHours =
 
 const dashboardSignal = getDashboardSignal(battle, regularHours);
 
-// A manual mark uses a single inferred direction. If signals disagree,
-// let the user wait for a clear direction instead of guessing.
-const markDirection =
-  regularHours && battleAction === "CALL_ENTRY_READY" && hold.direction !== "BEAR" ? "CALL" :
-  regularHours && battleAction === "PUT_ENTRY_READY" && hold.direction !== "BULL" ? "PUT" :
-  regularHours && hold.stage === "HOLD" && hold.direction === "BULL" && battleControl === "BULLS" ? "CALL" :
-  regularHours && hold.stage === "HOLD" && hold.direction === "BEAR" && battleControl === "BEARS" ? "PUT" :
-  regularHours && battleControl === "BULLS" && hold.direction !== "BEAR" ? "CALL" :
-  regularHours && battleControl === "BEARS" && hold.direction !== "BULL" ? "PUT" :
-  "NONE";
 // V2.3 dashboard display data: side-specific HA scoreboards + live 2-minute clock.
 const dashboardHA = buildHeikinAshi(completedCandles);
 const dashboardHARun = getHARun(dashboardHA);
@@ -5289,7 +5287,6 @@ const candleClockData = {
 };
 
 const entryTrackerData = {
-  direction: markDirection,
   livePrice: Number(latestGOOGLTrade?.price),
   liveTime: latestGOOGLTrade?.time || null,
   candleTime: completedCandles[completedCandles.length - 1]?.time || null,
@@ -6063,6 +6060,64 @@ body { padding: clamp(8px, 1.3vw, 16px); }
   .entryTrackerFoot { display:none; }
 }
 
+/* V2.7: keep the battle marker between the illustrated hands. */
+.ropeArea .knot { z-index: 9; }
+.bearEntry,.bearText { left:36%; }
+.bullEntry,.bullText { left:64%; }
+.rope { left:28%; right:28%; }
+
+/* A separate stock-move rope avoids mixing a personal entry with battle pressure. */
+.entryGauge {
+  grid-area:gauge; min-width:0; padding:9px 18px 7px;
+  background:#111720; border:1px solid #303b49; border-radius:14px;
+}
+.gaugeHeader,.gaugeEnds { display:flex; justify-content:space-between; align-items:center; gap:8px; font-size:11px; color:#b7c2d0; }
+.gaugeHeader span:first-child { font-weight:900; letter-spacing:.08em; color:#f3d783; }
+.gaugeEnds span:first-child { color:#ff8590; }
+.gaugeEnds span:last-child { color:#80ffc0; }
+#gaugeMove { font-weight:800; color:#f5f7fa; text-align:center; }
+.gaugeTrack { position:relative; height:48px; margin:3px 0; }
+.gaugeRope { position:absolute; left:3%; right:3%; top:23px; height:10px; border-radius:9px;
+  background:repeating-linear-gradient(45deg,#856143,#856143 7px,#c39764 7px,#c39764 14px);
+  box-shadow:0 1px 8px #000; }
+.gaugeEntry,.gaugeCurrent { position:absolute; top:0; transform:translateX(-50%); font-size:10px; font-weight:900; white-space:nowrap; }
+.gaugeEntry { left:50%; color:#f6cd72; }
+.gaugeEntry::after,.gaugeCurrent::after { content:""; display:block; width:8px; height:20px; margin:2px auto 0; border-radius:5px; }
+.gaugeEntry::after { background:#f6cd72; }
+.gaugeCurrent { color:#73c9ff; transition:left .6s ease; }
+.gaugeCurrent::after { background:#55b7ff; box-shadow:0 0 10px #42aaff; }
+.dashboard { grid-template-areas:"header header" "status status" "arena arena" "gauge gauge" "cockpit cockpit" "cards cards" "warning warning"; }
+.cards { grid-template-columns:repeat(2,minmax(0,1fr)); }
+.cockpit { grid-template-columns:minmax(0,1fr) clamp(205px,22vw,275px) minmax(0,1fr); }
+.cockpitCenter { width:clamp(205px,22vw,275px); height:118px; aspect-ratio:auto; border-radius:65px; gap:9px; padding:12px;
+  background:linear-gradient(180deg,#1b2733,#0d151d); }
+.directionButton { width:50%; height:100%; min-height:62px; border-radius:50%; font-weight:1000; font-size:clamp(17px,2vw,23px); color:white; cursor:pointer; }
+.callButton { border:2px solid #8ffac1; background:radial-gradient(circle at 45% 35%,#3bdc8e,#087246); }
+.putButton { border:2px solid #ff9ca5; background:radial-gradient(circle at 45% 35%,#ff747e,#9d1725); }
+.directionButton:disabled { opacity:.45; filter:grayscale(.5); cursor:not-allowed; }
+#endTrackingButton { border:1px solid #e4c36f; background:#263340; color:#f6d57a; border-radius:12px; padding:12px; font-weight:900; cursor:pointer; }
+[hidden] { display:none !important; }
+@media (max-width:700px) and (orientation:portrait) {
+  .dashboard { grid-template-areas:"header" "status" "arena" "gauge" "cockpit" "cards" "warning"; }
+  .entryGauge { padding:7px 9px; }
+  .gaugeHeader,.gaugeEnds { font-size:9px; }
+  .cockpit { grid-template-columns:minmax(0,1fr) 124px minmax(0,1fr); }
+  .cockpitCenter { width:124px; height:74px; gap:3px; padding:7px; }
+  .directionButton { min-height:52px; font-size:12px; }
+  .rope { left:31%; right:31%; }
+}
+@media (orientation:landscape) and (max-height:600px) {
+  .dashboard { grid-template-areas:"header header" "status status" "arena arena" "gauge gauge" "cockpit cockpit" "cards cards" "warning warning"; }
+  .entryGauge { padding:4px 10px; }
+  .gaugeTrack { height:36px; }
+  .gaugeRope { top:20px; }
+  .gaugeEntry::after,.gaugeCurrent::after { height:15px; }
+  .cockpit { grid-template-columns:minmax(0,1fr) 175px minmax(0,1fr); }
+  .cockpitCenter { width:175px; height:85px; gap:5px; padding:8px; }
+  .directionButton { min-height:60px; font-size:14px; }
+  .rope { left:31%; right:31%; }
+}
+
 </style>
 </head>
 
@@ -6089,9 +6144,9 @@ body { padding: clamp(8px, 1.3vw, 16px); }
         ${dailyBias.bias} ${dailyBias.arrow || ""}
       </div>
       <div class="dailyConfirm">
-        ${dailyBias.confirmed ? "HA CONFIRMED" : dailyBias.bias === "BUILDING" ? "BUILDING" : "HA NOT CONFIRMED"}
+        ${dailyBias.confirmed ? "TREND CONFIRMED" : dailyBias.bias === "BUILDING" ? "BUILDING" : "TREND NOT CONFIRMED"}
       </div>
-      <div class="marketLine">${marketSession} · ${regularHours ? "LIVE MARKET" : "MARKET CLOSED"}</div>
+      <div class="marketLine">${marketSession} · ${regularHours ? "LIVE MARKET" : "MARKET CLOSED"} · <span id="marketClock">--:-- CT</span></div>
     </div>
 
   </div>
@@ -6109,9 +6164,7 @@ body { padding: clamp(8px, 1.3vw, 16px); }
       }
     </div>
 
-    <div class="pressure">
-      ${battlePressure}
-    </div>
+    <div class="pressure">${dashboardStrength}</div>
 
   </div>
 
@@ -6136,7 +6189,7 @@ body { padding: clamp(8px, 1.3vw, 16px); }
     </div>
 
 
-    <div class="ropeArea ${tugIntensity}" style="transform: translateX(${tugShift}px);">
+    <div class="ropeArea ${tugIntensity}">
     <div class="tug-character tug-bear"><img src="/BEARS.jpeg" alt="Bear pulling the rope"></div>
     <div class="tug-character tug-bull"><img src="/BULLS.jpeg" alt="Bull pulling the rope"></div>
     
@@ -6166,6 +6219,12 @@ body { padding: clamp(8px, 1.3vw, 16px); }
 
   </div>
 
+  <div class="entryGauge" aria-label="Stock price movement since your marked entry">
+    <div class="gaugeHeader"><span>MY ENTRY • GOOGL STOCK MOVE</span><span id="gaugeStatus">Mark a CALL or PUT after your trade</span></div>
+    <div class="gaugeTrack"><div class="gaugeRope"></div><div class="gaugeEntry" id="gaugeEntry" hidden>ENTRY</div><div class="gaugeCurrent" id="gaugeCurrent" hidden>CURRENT</div></div>
+    <div class="gaugeEnds"><span>STOCK DOWN</span><span id="gaugeMove">Waiting for entry</span><span>STOCK UP</span></div>
+  </div>
+
 
   <div class="cockpit">
     <div class="actionBox">
@@ -6180,9 +6239,9 @@ body { padding: clamp(8px, 1.3vw, 16px); }
     </div>
 
     <div class="aiReadBox analysisBox">
-      <div class="aiReadTitle">AI READ</div>
+      <div class="aiReadTitle">MARKET READ</div>
       <div class="aiReadHeadline">${aiRead.headline}</div>
-      <div class="aiReadMeta">${aiRead.alignment} · DAILY ${dailyBias.bias} · ${dailyBias.confirmation}</div>
+      <div class="aiReadMeta">${aiRead.alignment === "WITH DAILY BIAS" ? "With the daily trend" : aiRead.alignment === "COUNTER DAILY BIAS" ? "Against the daily trend" : "Daily trend still developing"} · Daily view: ${dailyBias.bias.toLowerCase()}</div>
       <div class="aiReadNote">${aiRead.note}</div>
     </div>
 
@@ -6194,7 +6253,9 @@ body { padding: clamp(8px, 1.3vw, 16px); }
     </div>
 
     <div class="cockpitCenter">
-      <button id="entryTrackerButton" type="button" disabled>MARK ENTRY</button>
+      <button id="markCallButton" class="directionButton callButton" type="button" disabled>CALL</button>
+      <button id="markPutButton" class="directionButton putButton" type="button" disabled>PUT</button>
+      <button id="endTrackingButton" type="button" hidden>END TRACKING</button>
     </div>
   </div>
 
@@ -6202,30 +6263,10 @@ body { padding: clamp(8px, 1.3vw, 16px); }
 
     <div class="card">
       <div class="label">
-        CONTROL
-      </div>
-      <div class="value">
-        ${battleControl}
-      </div>
-    </div>
-
-
-    <div class="card">
-      <div class="label">
         PRESSURE
       </div>
       <div class="value">
         ${battlePressure}
-      </div>
-    </div>
-
-
-    <div class="card">
-      <div class="label">
-        HEIKIN-ASHI
-      </div>
-      <div class="value">
-        ${battle.haControl || "WAIT"}
       </div>
     </div>
 
@@ -6254,7 +6295,7 @@ body { padding: clamp(8px, 1.3vw, 16px); }
 
         : battleAction === "CALL_ENTRY_READY" || battleAction === "PUT_ENTRY_READY"
 
-        ? "Oliver setup detected — check trigger and invalidation before acting."
+        ? "Potential trend entry — check the trigger and invalidation before acting."
 
         : entryCrossed !== "NONE"
 
@@ -6285,13 +6326,24 @@ function refreshCandleClock() {
   candleMove.className = move > 0 ? "up" : move < 0 ? "down" : "";
 }
 refreshCandleClock(); setInterval(refreshCandleClock,250);
+function refreshMarketClock() {
+  document.getElementById("marketClock").textContent =
+    new Intl.DateTimeFormat("en-US", { timeZone:"America/Chicago", hour:"numeric", minute:"2-digit", second:"2-digit" }).format(new Date()) + " CT";
+}
+refreshMarketClock(); setInterval(refreshMarketClock,1000);
 
 // The tracker is local to this browser; it does not place, close, or detect orders.
 const trackerKey = "bvb-googl-manual-entry-v1";
 const trackerData = ${JSON.stringify(entryTrackerData)};
 const trackerState = document.getElementById("entryTrackerState");
 const trackerDetail = document.getElementById("entryTrackerDetail");
-const trackerButton = document.getElementById("entryTrackerButton");
+const callButton = document.getElementById("markCallButton");
+const putButton = document.getElementById("markPutButton");
+const endButton = document.getElementById("endTrackingButton");
+const gaugeEntry = document.getElementById("gaugeEntry");
+const gaugeCurrent = document.getElementById("gaugeCurrent");
+const gaugeMove = document.getElementById("gaugeMove");
+const gaugeStatus = document.getElementById("gaugeStatus");
 let trackedEntry = null;
 try {
   const saved = JSON.parse(localStorage.getItem(trackerKey) || "null");
@@ -6306,9 +6358,9 @@ const freshTrade = trackerData.streamStatus === "connected" &&
   Number.isFinite(liveAge) && liveAge >= -10000 && liveAge < 30000;
 const freshCandle = Number.isFinite(Date.parse(trackerData.candleTime)) &&
   Date.now() - Date.parse(trackerData.candleTime) < 6 * 60 * 1000;
-const canMark = trackerData.regularHours && freshTrade && freshCandle &&
-  trackerData.direction !== "NONE";
+const canMark = trackerData.regularHours && freshTrade && freshCandle;
 const dollars = value => "$" + Number(value).toFixed(2);
+function moveText(value) { return (value >= 0 ? "+" : "−") + dollars(Math.abs(value)); }
 
 if (trackedEntry) {
   const sameDirection = trackerData.holdDirection ===
@@ -6348,12 +6400,25 @@ if (trackedEntry) {
     new Date(trackedEntry.time).toLocaleString() +
     (signedMove === null ? " · Current price unavailable" :
       " · GOOGL " + dollars(trackerData.livePrice) + " · Directional move " +
-      (signedMove >= 0 ? "+" : "−") + dollars(Math.abs(signedMove)) +
+      moveText(signedMove) +
       (bestObservedMove > 0 ? " · Best observed +" + dollars(bestObservedMove) +
         " · Given back " + dollars(giveback) : ""));
-  trackerButton.textContent = "END TRACKING";
-  trackerButton.disabled = false;
-  trackerButton.addEventListener("click", () => {
+  callButton.hidden = true; putButton.hidden = true; endButton.hidden = false;
+  gaugeEntry.hidden = false;
+  gaugeStatus.textContent = trackedEntry.direction + " marked at " + dollars(trackedEntry.price);
+  if (freshTrade) {
+    const rawMove = trackerData.livePrice - Number(trackedEntry.price);
+    // The visual scale is +/- $2 of GOOGL stock movement; exact amounts stay in text.
+    const displayPercent = Math.max(7, Math.min(93, 50 + rawMove * 21.5));
+    gaugeCurrent.style.left = displayPercent + "%";
+    gaugeCurrent.hidden = false;
+    gaugeMove.textContent = "Stock " + moveText(rawMove) + " · " + trackedEntry.direction + " direction " + moveText(signedMove);
+    if (Math.abs(rawMove) >= 2) gaugeStatus.textContent += " · gauge at limit";
+  } else {
+    gaugeCurrent.hidden = true;
+    gaugeMove.textContent = "Waiting for a fresh stock price";
+  }
+  endButton.addEventListener("click", () => {
     if (confirm("End tracking this entry? This does not close your trade.")) {
       localStorage.removeItem(trackerKey);
       window.location.reload();
@@ -6361,22 +6426,30 @@ if (trackedEntry) {
   });
 } else {
   trackerState.textContent = canMark ?
-    "Ready to mark " + trackerData.direction + " at " + dollars(trackerData.livePrice) :
-    "WAIT · Entry direction or live price unavailable";
-  trackerDetail.textContent = "The button marks your actual entry only after you place the trade.";
-  trackerButton.textContent = canMark ? "MARK ENTRY · " + trackerData.direction : "MARK ENTRY";
-  trackerButton.disabled = !canMark;
-  trackerButton.addEventListener("click", () => {
+    "Ready to mark CALL or PUT at " + dollars(trackerData.livePrice) :
+    "WAIT · Fresh market price unavailable";
+  trackerDetail.textContent = "After placing your trade, press its button to track GOOGL from that point.";
+  callButton.disabled = !canMark;
+  putButton.disabled = !canMark;
+  function markEntry(direction) {
     if (!canMark) return;
-    const entry = { symbol: "GOOGL", direction: trackerData.direction,
-      price: trackerData.livePrice, time: trackerData.liveTime, bestObservedMove: 0 };
+    if (Date.now() - Date.parse(trackerData.liveTime) >= 30000) {
+      trackerState.textContent = "WAIT · Price is stale. Refresh for a new quote.";
+      callButton.disabled = true; putButton.disabled = true;
+      return;
+    }
+    const entry = { symbol: "GOOGL", direction: direction,
+      price: trackerData.livePrice, time: new Date().toISOString(),
+      sourceTime: trackerData.liveTime, bestObservedMove: 0 };
     try {
       localStorage.setItem(trackerKey, JSON.stringify(entry));
       window.location.reload();
     } catch (_) {
       trackerState.textContent = "Could not save entry in this browser.";
     }
-  });
+  }
+  callButton.addEventListener("click", () => markEntry("CALL"));
+  putButton.addEventListener("click", () => markEntry("PUT"));
 }
 setTimeout(() => window.location.reload(), 10000);
 </script>
@@ -6433,4 +6506,3 @@ app.listen(
 
   }
 );
-
