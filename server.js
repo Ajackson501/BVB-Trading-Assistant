@@ -3076,7 +3076,10 @@ function analyzeDailyBias(candles) {
     };
   }
 
-  const current = candles[candles.length - 1];
+  // Working Daily Bias uses roughly the most recent 3 months (~63 trading days).
+  // Full history is retained only so the 200 SMA can remain long-term context.
+  const workingDaily = candles.slice(-63);
+  const current = workingDaily[workingDaily.length - 1];
   const price = Number(current.close);
   const sma8 = calculateSMA(candles, 8);
   const sma20 = calculateSMA(candles, 20);
@@ -3097,8 +3100,8 @@ function analyzeDailyBias(candles) {
   const sma8Direction = slope(sma8, previousSMA8);
   const sma20Direction = slope(sma20, previousSMA20);
   const sma200Direction = slope(sma200, previousSMA200);
-  const structure = detectStructure(candles);
-  const ha = buildHeikinAshi(candles);
+  const structure = detectStructure(workingDaily);
+  const ha = buildHeikinAshi(workingDaily);
   const currentHA = ha[ha.length - 1];
   const haRun = getHARun(ha);
 
@@ -3146,8 +3149,8 @@ function analyzeDailyBias(candles) {
     confirmation,
     reason:
       bias === "TRANSITION"
-        ? "Daily 20 SMA regime is mixed/transitioning. No directional daily bias."
-        : `${bias} daily 20 SMA regime; ${confirmed ? "daily Heikin-Ashi confirms." : "daily Heikin-Ashi has not confirmed."}`,
+        ? "3-month daily view is mixed/transitioning. No directional working bias."
+        : `${bias} 3-month daily view; ${confirmed ? "daily Heikin-Ashi confirms." : "daily Heikin-Ashi has not confirmed."} 200 SMA remains long-term context.`,
     price: Number(price.toFixed(4)),
     sma8: Number(sma8.toFixed(4)),
     sma20: Number(sma20.toFixed(4)),
@@ -3165,7 +3168,7 @@ function analyzeDailyBias(candles) {
   };
 }
 
-function buildAIRead(battle, dailyBias) {
+function buildMarketReadV2(battle, dailyBias) {
   const bias = dailyBias?.bias || "BUILDING";
   const control = battle?.control || "NEUTRAL";
   const phase = battle?.phase || "WAIT";
@@ -3212,7 +3215,7 @@ function buildAIRead(battle, dailyBias) {
     alignment,
     phase,
     dailyConfirmation: dailyBias?.confirmation || "WAITING",
-    note: "A pressure line is an observation, not an entry. Setup triggers require separate confirmation; manual entries are tracked only in this browser."
+    note: "Decision sequence: setup → trigger → trend health → deterioration → invalidation. Pressure alone is not an entry."
   };
 }
 
@@ -5235,7 +5238,7 @@ app.get(
 
 const battle = analyzeTrendBattle(completedCandles);
 const dailyBias = analyzeDailyBias(dailyCandles);
-const aiRead = buildAIRead(battle, dailyBias);
+const aiRead = buildMarketReadV2(battle, dailyBias);
 const hold = trendHold;
 
 const ropePosition = Number(battle.ropePosition || 0);
@@ -5295,6 +5298,14 @@ const entryTrackerData = {
   battleControl,
   battleAction,
   changeWatch: battle.changeWatch,
+  battlePressure,
+  battlePhase,
+  dailyBias: dailyBias.bias,
+  dailyConfirmed: dailyBias.confirmed,
+  dailyHAColor: dailyBias.haColor || "UNKNOWN",
+  dailyHARun: dailyBias.haRunCandles || 0,
+  invalidation: Number(battle.invalidation),
+  trigger: Number(battle.entryPrice),
   streamStatus: alpacaStreamStatus,
   regularHours
 };
@@ -6129,6 +6140,16 @@ body { padding: clamp(8px, 1.3vw, 16px); }
   .rope { left:31%; right:31%; }
 }
 
+
+/* V2 decision-cockpit priorities */
+.pressureSupport { opacity:.72; transform:scale(.96); }
+body.trade-active .analysisBox, body.trade-active .entryTracker {
+  border-color:#ffdc79 !important; box-shadow:0 0 0 1px rgba(255,220,121,.18),0 8px 22px rgba(0,0,0,.24);
+}
+body.trade-active .actionBox { opacity:.78; }
+body.trade-active .pressureSupport { opacity:.48; }
+body.trade-active .entryGauge { box-shadow:0 0 0 1px rgba(255,220,121,.22); }
+
 </style>
 </head>
 
@@ -6149,7 +6170,7 @@ body { padding: clamp(8px, 1.3vw, 16px); }
     </div>
 
     <div class="session">
-      <div class="dailyBiasLabel">DAILY BIAS</div>
+      <div class="dailyBiasLabel">DAILY BIAS · 3-MONTH VIEW</div>
       <div class="dailyBiasValue ${dailyBias.bias === "BULLISH" ? "biasBull" : dailyBias.bias === "BEARISH" ? "biasBear" : "biasNeutral"}">
         ${dailyBias.bias === "BULLISH" ? "🟢" : dailyBias.bias === "BEARISH" ? "🔴" : dailyBias.bias === "TRANSITION" ? "🟡" : "⚪"}
         ${dailyBias.bias} ${dailyBias.arrow || ""}
@@ -6251,10 +6272,10 @@ body { padding: clamp(8px, 1.3vw, 16px); }
     </div>
 
     <div class="aiReadBox analysisBox">
-      <div class="aiReadTitle">MARKET READ</div>
-      <div class="aiReadHeadline">${aiRead.headline}</div>
-      <div class="aiReadMeta">${aiRead.alignment === "WITH DAILY BIAS" ? "With the daily trend" : aiRead.alignment === "COUNTER DAILY BIAS" ? "Against the daily trend" : "Daily trend still developing"} · Daily view: ${dailyBias.bias.toLowerCase()}</div>
-      <div class="aiReadNote">${aiRead.note}</div>
+      <div class="aiReadTitle">MARKET READ V2</div>
+      <div class="aiReadHeadline" id="marketReadHeadline">${aiRead.headline}</div>
+      <div class="aiReadMeta" id="marketReadMeta">${aiRead.alignment === "WITH DAILY BIAS" ? "With the daily trend" : aiRead.alignment === "COUNTER DAILY BIAS" ? "Against the daily trend" : "Daily trend still developing"} · Daily view: ${dailyBias.bias.toLowerCase()}</div>
+      <div class="aiReadNote" id="marketReadNote">${aiRead.note}</div>
     </div>
 
     <div class="entryTracker" aria-live="polite">
@@ -6274,13 +6295,9 @@ body { padding: clamp(8px, 1.3vw, 16px); }
 
   <div class="cards">
 
-    <div class="card">
-      <div class="label">
-        PRESSURE
-      </div>
-      <div class="value">
-        ${battlePressure}
-      </div>
+    <div class="card pressureSupport">
+      <div class="label">PRESSURE · SUPPORTING</div>
+      <div class="value">${battlePressure}</div>
     </div>
 
 
@@ -6360,6 +6377,9 @@ const gaugeGiveback = document.getElementById("gaugeGiveback");
 const gaugeProgress = document.getElementById("gaugeProgress");
 const gaugeMove = document.getElementById("gaugeMove");
 const gaugeStatus = document.getElementById("gaugeStatus");
+const marketReadHeadline = document.getElementById("marketReadHeadline");
+const marketReadMeta = document.getElementById("marketReadMeta");
+const marketReadNote = document.getElementById("marketReadNote");
 let trackedEntry = null;
 try {
   const saved = JSON.parse(localStorage.getItem(trackerKey) || "null");
@@ -6419,6 +6439,41 @@ if (trackedEntry) {
     else if (signedMove < 0)
       verdict = "TRACKING · PRICE AGAINST ENTRY";
   }
+  // MARKET READ V2: after entry, shift from setup discovery to trade-health synthesis.
+  document.body.classList.add("trade-active");
+  const favorableControl = trackerData.battleControl === (trackedEntry.direction === "CALL" ? "BULLS" : "BEARS");
+  const dailyAligned = trackerData.dailyBias === (trackedEntry.direction === "CALL" ? "BULLISH" : "BEARISH");
+  const givebackRatio = bestObservedMove > 0 && giveback !== null ? giveback / bestObservedMove : 0;
+  let health = "TRACKING — waiting for enough evidence.";
+  let healthNote = "Watch the marked trade relative to trend health, not a single candle.";
+  if (verdict.startsWith("EXIT SIGNAL")) {
+    health = trackedEntry.direction + " THESIS INVALIDATED · REVIEW EXIT";
+    healthNote = "Regime break, opposite setup, or hold-direction conflict detected. Review the position rather than treating this as a normal pullback.";
+  } else if (verdict.includes("AGAINST ENTRY")) {
+    health = trackedEntry.direction + " UNDER PRESSURE · PRICE AGAINST ENTRY";
+    healthNote = "Price is unfavorable from your marker. Check whether short-term control and the original trend thesis are still intact.";
+  } else if (verdict.includes("TREND WEAKENING") || trackerData.changeWatch === "WARNING") {
+    health = trackedEntry.direction + " DETERIORATING · PROTECT THE MOVE";
+    healthNote = "Trend evidence is weakening. Giveback and control now matter more than the original setup.";
+  } else if (givebackRatio >= 0.70 && bestObservedMove >= 0.10) {
+    health = trackedEntry.direction + " LARGE GIVEBACK · REVIEW TREND HEALTH";
+    healthNote = "Most of the best favorable stock move has been surrendered. Confirm that this is still a pullback rather than deterioration.";
+  } else if (givebackRatio >= 0.35 && bestObservedMove >= 0.10) {
+    health = trackedEntry.direction + " PULLBACK FROM BEST · WATCH";
+    healthNote = "A meaningful portion of the best move has been given back, but giveback alone is not an exit signal.";
+  } else if (favorableControl && sameDirection && signedMove !== null && signedMove >= 0) {
+    health = trackedEntry.direction + " TREND HEALTHY · HOLD CONDITIONS INTACT";
+    healthNote = "Price, short-term control, and Trend Hold remain aligned with the marked direction.";
+  } else if (signedMove !== null && signedMove >= 0) {
+    health = trackedEntry.direction + " STILL FAVORABLE · MOMENTUM MIXED";
+    healthNote = "The trade remains favorable from entry, but the supporting trend evidence is mixed. Watch for renewed alignment or deterioration.";
+  }
+  marketReadHeadline.textContent = health;
+  marketReadMeta.textContent = (dailyAligned ? "With 3-month daily trend" : "Against/mixed 3-month daily trend") +
+    " · " + trackerData.battleControl + " short-term control" +
+    (bestObservedMove > 0 ? " · Best +" + dollars(bestObservedMove) + " · Giveback " + dollars(giveback || 0) : "");
+  marketReadNote.textContent = healthNote;
+
   trackerState.textContent = trackedEntry.direction + " · " + verdict;
   trackerDetail.textContent = "Marked " + dollars(trackedEntry.price) + " at " +
     new Date(trackedEntry.time).toLocaleString() +
@@ -6471,6 +6526,8 @@ if (trackedEntry) {
     }
   });
 } else {
+  document.body.classList.add("setup-mode");
+  marketReadNote.textContent = "PRE-ENTRY: wait for a qualifying setup and trigger. Pressure-line movement alone is supporting evidence, not authorization to enter.";
   trackerState.textContent = canMark ?
     "Ready to mark CALL or PUT at " + dollars(trackerData.livePrice) :
     "WAIT · Fresh market price unavailable";
