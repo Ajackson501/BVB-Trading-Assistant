@@ -6076,16 +6076,15 @@ body { padding: clamp(8px, 1.3vw, 16px); }
 .gaugeEnds span:first-child { color:#ff8590; }
 .gaugeEnds span:last-child { color:#80ffc0; }
 #gaugeMove { font-weight:800; color:#f5f7fa; text-align:center; }
-.gaugeTrack { position:relative; height:48px; margin:3px 0; }
-.gaugeRope { position:absolute; left:3%; right:3%; top:23px; height:10px; border-radius:9px;
+.gaugeTrack { position:relative; height:60px; margin:3px 0; }
+.gaugeRope { position:absolute; left:3%; right:3%; top:26px; height:10px; border-radius:9px;
   background:repeating-linear-gradient(45deg,#856143,#856143 7px,#c39764 7px,#c39764 14px);
   box-shadow:0 1px 8px #000; }
-.gaugeEntry,.gaugeCurrent { position:absolute; top:0; transform:translateX(-50%); font-size:10px; font-weight:900; white-space:nowrap; }
-.gaugeEntry { left:50%; color:#f6cd72; }
-.gaugeEntry::after,.gaugeCurrent::after { content:""; display:block; width:8px; height:20px; margin:2px auto 0; border-radius:5px; }
-.gaugeEntry::after { background:#f6cd72; }
-.gaugeCurrent { color:#73c9ff; transition:left .6s ease; }
-.gaugeCurrent::after { background:#55b7ff; box-shadow:0 0 10px #42aaff; }
+.gaugeEntry,.gaugeCurrent { position:absolute; transform:translateX(-50%); font-size:10px; font-weight:900; white-space:nowrap; }
+.gaugeEntry { left:50%; top:0; color:#f6cd72; }
+.gaugeEntry::after { content:""; display:block; width:8px; height:20px; margin:2px auto 0; border-radius:5px; background:#f6cd72; }
+.gaugeCurrent { top:43px; color:#73c9ff; transition:left .6s ease; }
+.gaugeCurrent::before { content:""; position:absolute; left:50%; top:-22px; transform:translateX(-50%); width:8px; height:20px; border-radius:5px; background:#55b7ff; box-shadow:0 0 10px #42aaff; }
 .dashboard { grid-template-areas:"header header" "status status" "arena arena" "gauge gauge" "cockpit cockpit" "cards cards" "warning warning"; }
 .cards { grid-template-columns:repeat(2,minmax(0,1fr)); }
 .cockpit { grid-template-columns:minmax(0,1fr) clamp(205px,22vw,275px) minmax(0,1fr); }
@@ -6096,6 +6095,8 @@ body { padding: clamp(8px, 1.3vw, 16px); }
 .putButton { border:2px solid #ff9ca5; background:radial-gradient(circle at 45% 35%,#ff747e,#9d1725); }
 .directionButton:disabled { opacity:.45; filter:grayscale(.5); cursor:not-allowed; }
 #endTrackingButton { border:1px solid #e4c36f; background:#263340; color:#f6d57a; border-radius:12px; padding:12px; font-weight:900; cursor:pointer; }
+.cockpitCenter.trackingActive { flex-direction:column; height:104px; border-radius:18px; box-shadow:0 0 0 2px #27313e; }
+#activeEntryLabel { color:#f5d884; font-weight:900; font-size:12px; letter-spacing:.04em; text-align:center; }
 [hidden] { display:none !important; }
 @media (max-width:700px) and (orientation:portrait) {
   .dashboard { grid-template-areas:"header" "status" "arena" "gauge" "cockpit" "cards" "warning"; }
@@ -6109,9 +6110,11 @@ body { padding: clamp(8px, 1.3vw, 16px); }
 @media (orientation:landscape) and (max-height:600px) {
   .dashboard { grid-template-areas:"header header" "status status" "arena arena" "gauge gauge" "cockpit cockpit" "cards cards" "warning warning"; }
   .entryGauge { padding:4px 10px; }
-  .gaugeTrack { height:36px; }
-  .gaugeRope { top:20px; }
-  .gaugeEntry::after,.gaugeCurrent::after { height:15px; }
+  .gaugeTrack { height:49px; }
+  .gaugeRope { top:22px; }
+  .gaugeEntry::after { height:16px; }
+  .gaugeCurrent { top:34px; }
+  .gaugeCurrent::before { top:-18px; height:16px; }
   .cockpit { grid-template-columns:minmax(0,1fr) 175px minmax(0,1fr); }
   .cockpitCenter { width:175px; height:85px; gap:5px; padding:8px; }
   .directionButton { min-height:60px; font-size:14px; }
@@ -6252,9 +6255,10 @@ body { padding: clamp(8px, 1.3vw, 16px); }
       <div class="entryTrackerFoot">GOOGL marker only. Tracks the stock move from your marked entry; no option P&amp;L or orders.</div>
     </div>
 
-    <div class="cockpitCenter">
+    <div class="cockpitCenter" id="entryControls">
       <button id="markCallButton" class="directionButton callButton" type="button" disabled>CALL</button>
       <button id="markPutButton" class="directionButton putButton" type="button" disabled>PUT</button>
+      <div id="activeEntryLabel" hidden></div>
       <button id="endTrackingButton" type="button" hidden>END TRACKING</button>
     </div>
   </div>
@@ -6404,6 +6408,10 @@ if (trackedEntry) {
       (bestObservedMove > 0 ? " · Best observed +" + dollars(bestObservedMove) +
         " · Given back " + dollars(giveback) : ""));
   callButton.hidden = true; putButton.hidden = true; endButton.hidden = false;
+  document.getElementById("entryControls").className += " trackingActive";
+  const activeEntryLabel = document.getElementById("activeEntryLabel");
+  activeEntryLabel.textContent = trackedEntry.direction + " ENTRY ACTIVE";
+  activeEntryLabel.hidden = false;
   gaugeEntry.hidden = false;
   gaugeStatus.textContent = trackedEntry.direction + " marked at " + dollars(trackedEntry.price);
   if (freshTrade) {
