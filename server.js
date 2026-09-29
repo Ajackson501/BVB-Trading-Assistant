@@ -5790,6 +5790,11 @@ and (max-height: 700px) {
   mask-image: linear-gradient(to left, #000 0%, #000 86%, transparent 100%);
   animation: bullPull 1.4s ease-in-out infinite;
 }
+/* Market closed: keep both characters completely still. */
+.ropeArea.market-closed .tug-character img {
+  animation: none !important;
+  transform: none !important;
+}
 /* Tug-of-war intensity */
 
 .tug-waiting .tug-character img {
@@ -6009,7 +6014,7 @@ body { padding: clamp(8px, 1.3vw, 16px); }
 
 /* V3.1 — responsive five-box strength strip under the animation. */
 .strengthMeter {
-  grid-column:1 / -1; display:grid; grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);
+  grid-area:strength; grid-column:1 / -1; display:grid; grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);
   align-items:center; gap:10px; min-height:34px; padding:5px 12px; margin:0;
   background:linear-gradient(180deg,#0d141d,#090e14); border:1px solid #293442; border-radius:10px;
 }
@@ -6078,11 +6083,11 @@ body { padding: clamp(8px, 1.3vw, 16px); }
 #entryTrackerState { margin-top:4px; }
 #entryTrackerDetail { margin-top:3px; }
 .entryTrackerFoot { margin-top:4px; }
-.dashboard { grid-template-areas:"header header" "status status" "arena arena" "cockpit cockpit" "cards cards" "warning warning"; }
+.dashboard { grid-template-areas:"header header" "status status" "arena arena" "strength strength" "cockpit cockpit" "cards cards" "warning warning"; }
 .actionBox,.entryTracker,.holdBox,.analysisBox { grid-area:unset; }
 
 @media (max-width:700px) and (orientation:portrait) {
-  .dashboard { grid-template-areas:"header" "status" "arena" "cockpit" "cards" "warning"; }
+  .dashboard { grid-template-areas:"header" "status" "arena" "strength" "cockpit" "cards" "warning"; }
   .cockpit { grid-template-columns:minmax(0,1fr) 116px minmax(0,1fr); grid-template-areas:"action center hold" "analysis center tracker"; min-height:170px; gap:5px 0; }
   .cockpitCenter { width:116px; padding:8px; }
   .cockpit .actionBox,.cockpit .analysisBox { padding:7px 25px 7px 7px; }
@@ -6095,7 +6100,7 @@ body { padding: clamp(8px, 1.3vw, 16px); }
   .aiReadMeta,.aiReadNote { font-size:8px; }
 }
 @media (orientation:landscape) and (max-height:600px) {
-  .dashboard { grid-template-areas:"header header" "status status" "arena arena" "cockpit cockpit" "cards cards" "warning warning"; }
+  .dashboard { grid-template-areas:"header header" "status status" "arena arena" "strength strength" "cockpit cockpit" "cards cards" "warning warning"; }
   .cockpit { min-height:150px; grid-template-columns:minmax(0,1fr) 126px minmax(0,1fr); gap:4px 0; }
   .cockpitCenter { width:126px; padding:8px; }
   .cockpit .actionBox,.cockpit .analysisBox { padding:5px 26px 5px 7px; }
@@ -6135,7 +6140,7 @@ body { padding: clamp(8px, 1.3vw, 16px); }
 .gaugeCurrent::before { content:""; position:absolute; left:50%; top:-22px; transform:translateX(-50%); width:8px; height:20px; border-radius:5px; background:#55b7ff; box-shadow:0 0 10px #42aaff; }
 .gaugeProgress { margin-top:3px; min-height:16px; text-align:center; font-size:11px; font-weight:800; color:#d8bbff; }
 .gaugeProgress.hasGiveback { color:#ff9ba5; }
-.dashboard { grid-template-areas:"header header" "status status" "arena arena" "cockpit cockpit" "cards cards" "warning warning"; }
+.dashboard { grid-template-areas:"header header" "status status" "arena arena" "strength strength" "cockpit cockpit" "cards cards" "warning warning"; }
 .cards { grid-template-columns:repeat(2,minmax(0,1fr)); }
 .cockpit { grid-template-columns:minmax(0,1fr) clamp(205px,22vw,275px) minmax(0,1fr); }
 .cockpitCenter { width:clamp(205px,22vw,275px); height:118px; aspect-ratio:auto; border-radius:65px; gap:9px; padding:12px;
@@ -6149,7 +6154,7 @@ body { padding: clamp(8px, 1.3vw, 16px); }
 #activeEntryLabel { color:#f5d884; font-weight:900; font-size:12px; letter-spacing:.04em; text-align:center; }
 [hidden] { display:none !important; }
 @media (max-width:700px) and (orientation:portrait) {
-  .dashboard { grid-template-areas:"header" "status" "arena" "cockpit" "cards" "warning"; }
+  .dashboard { grid-template-areas:"header" "status" "arena" "strength" "cockpit" "cards" "warning"; }
   .entryGauge { padding:7px 9px; }
   .gaugeHeader,.gaugeEnds { font-size:9px; }
   .cockpit { grid-template-columns:minmax(0,1fr) 124px minmax(0,1fr); }
@@ -6158,7 +6163,7 @@ body { padding: clamp(8px, 1.3vw, 16px); }
   .rope { left:31%; right:31%; }
 }
 @media (orientation:landscape) and (max-height:600px) {
-  .dashboard { grid-template-areas:"header header" "status status" "arena arena" "cockpit cockpit" "cards cards" "warning warning"; }
+  .dashboard { grid-template-areas:"header header" "status status" "arena arena" "strength strength" "cockpit cockpit" "cards cards" "warning warning"; }
   .entryGauge { padding:4px 10px; }
   .gaugeTrack { height:49px; }
   .gaugeRope { top:22px; }
@@ -6272,7 +6277,7 @@ body.trade-active .pressureSupport { display:none; }
     </div>
 
 
-    <div class="ropeArea ${tugIntensity}">
+    <div class="ropeArea ${tugIntensity} ${regularHours ? "market-open" : "market-closed"}">
     <div class="tug-character tug-bear"><img src="/BEARS.jpeg" alt="Bear pulling the rope"></div>
     <div class="tug-character tug-bull"><img src="/BULLS.jpeg" alt="Bull pulling the rope"></div>
     
