@@ -6525,7 +6525,7 @@ if (trackedEntry) {
   const activeEntryLabel = document.getElementById("activeEntryLabel");
   activeEntryLabel.textContent = trackedEntry.direction + " ENTRY ACTIVE";
   activeEntryLabel.hidden = false;
-  mainCenterLabel.textContent = "ENTRY\n" + dollars(entryCents / 100);
+  mainCenterLabel.textContent = "ENTRY\\n" + dollars(entryCents / 100);
   positionLeftLabel.textContent = trackedEntry.direction === "PUT" ? "FAVORABLE" : "ADVERSE";
   positionRightLabel.textContent = trackedEntry.direction === "CALL" ? "FAVORABLE" : "ADVERSE";
   positionLeftLabel.hidden = false; positionRightLabel.hidden = false;
