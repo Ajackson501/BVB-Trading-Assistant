@@ -6227,7 +6227,7 @@ body.trade-active .pressureSupport { display:none; }
 
     <div>
       <div class="title">
-        BVB V2 — LIVE TREND BATTLE
+        TUG OF WAR — LIVE TREND BATTLE
       </div>
 
       <div class="price" id="liveHeaderPrice">
