@@ -409,7 +409,7 @@ function updateTrendHold(candles, battle) {
   if (!last || trendHold.analyzedCandle === last.time) return trendHold;
   if (candles.length < 21) {
     trendHold = { regime: "WAIT", stage: "WAIT", direction: "NONE", counterBars: 0,
-      analyzedCandle: last.time, reason: "Need 21 completed 2-minute candles for 8/20 trend health." };
+      analyzedCandle: last.time, reason: "Building enough completed candles to evaluate trend health." };
     return trendHold;
   }
 
@@ -437,12 +437,12 @@ function updateTrendHold(candles, battle) {
 
   let counterBars = (direction !== "NONE" && brokenEvidence >= 2) ? old.counterBars + 1 : 0;
   let stage = "WAIT";
-  let reason = "Waiting for a directional 8/20 two-minute trend.";
+  let reason = "Waiting for a clear two-minute directional trend.";
 
   if (direction !== "NONE") {
     if (counterBars >= 2 || (oppositeCore && lost20 && againstControl)) {
       stage = "REGIME_BROKEN";
-      reason = "Two-minute trend structure has broken: opposing 8/20/price evidence persisted with opposing control.";
+      reason = "Two-minute trend structure has broken; opposing evidence persisted with opposing control.";
       direction = "NONE";
       counterBars = 0;
     } else if (brokenEvidence >= 2 || warningEvidence >= 2) {
@@ -450,11 +450,8 @@ function updateTrendHold(candles, battle) {
       reason = "Two-minute trend is weakening; opposing structure/control evidence is developing.";
     } else {
       stage = "HOLD";
-      const longContext = Number.isFinite(sma200)
-        ? (direction === "BULL" ? (close >= sma200 ? " Price is above the 200 SMA." : " Price is below the 200 SMA.")
-                              : (close <= sma200 ? " Price is below the 200 SMA." : " Price is above the 200 SMA."))
-        : " 200 SMA context is still building.";
-      reason = `Two-minute 8/20 trend remains intact.${longContext}`;
+      // Keep indicator calculations private in user-facing Trend Hold language.
+      reason = "Two-minute trend remains intact.";
     }
   }
 
@@ -6239,7 +6236,7 @@ body.trade-active .pressureSupport { display:none; }
     </div>
 
     <div class="session">
-      <div class="dailyBiasLabel">5-DAY BIAS · 1-DAY CANDLES</div>
+      <div class="dailyBiasLabel">5-DAY MARKET BIAS · 1-DAY CANDLES</div>
       <div class="dailyBiasValue ${dailyBias.bias === "BULLISH" ? "biasBull" : dailyBias.bias === "BEARISH" ? "biasBear" : "biasNeutral"}">
         ${dailyBias.bias === "BULLISH" ? "🟢" : dailyBias.bias === "BEARISH" ? "🔴" : dailyBias.bias === "TRANSITION" ? "🟡" : "⚪"}
         ${dailyBias.bias} ${dailyBias.arrow || ""}
@@ -6247,6 +6244,7 @@ body.trade-active .pressureSupport { display:none; }
       <div class="dailyConfirm">
         ${dailyBias.confirmed ? "TREND CONFIRMED" : dailyBias.bias === "BUILDING" ? "BUILDING" : "TREND NOT CONFIRMED"}
       </div>
+      <div class="dailyConfirm">${dailyBias.bias === "BULLISH" ? "Broader market conditions favor buyers." : dailyBias.bias === "BEARISH" ? "Broader market conditions favor sellers." : dailyBias.bias === "TRANSITION" ? "Broader market conditions are mixed." : "Broader market conditions are still developing."}</div>
       <div class="marketLine">${marketSession} · ${regularHours ? "LIVE MARKET" : "MARKET CLOSED"} · <span id="marketClock">--:-- CT</span></div>
     </div>
 
@@ -6273,8 +6271,8 @@ body.trade-active .pressureSupport { display:none; }
   <div class="arena">
 
     <div class="teamOverlay bearOverlay">BEARS</div>
-    <div class="haSideScore bearScore"><div class="scoreTeam">BEARS</div><div class="scoreNumber">${String(bearHARun).padStart(2, "0")}</div><div class="scoreLabel">HA RUN</div></div>
-    <div class="haSideScore bullScore"><div class="scoreTeam">BULLS</div><div class="scoreNumber">${String(bullHARun).padStart(2, "0")}</div><div class="scoreLabel">HA RUN</div></div>
+    <div class="haSideScore bearScore"><div class="scoreTeam">BEARS</div><div class="scoreNumber">${String(bearHARun).padStart(2, "0")}</div><div class="scoreLabel">CONTROL</div></div>
+    <div class="haSideScore bullScore"><div class="scoreTeam">BULLS</div><div class="scoreNumber">${String(bullHARun).padStart(2, "0")}</div><div class="scoreLabel">CONTROL</div></div>
     <div class="teamOverlay bullOverlay">BULLS</div>
 
     <div class="teams">
@@ -6353,7 +6351,7 @@ body.trade-active .pressureSupport { display:none; }
   <div class="cards">
 
     <div class="card contextSupport">
-      <div class="label">5-DAY CONTEXT · 1-DAY CANDLES</div>
+      <div class="label">5-DAY MARKET BIAS · 1-DAY CANDLES</div>
       <div class="value">${dailyBias.bias} ${dailyBias.arrow || ""}</div>
     </div>
 
@@ -6653,6 +6651,51 @@ async function syncLivePriceDisplay() {
     if (moveEl) moveEl.textContent = moveText(signedMoveLive);
     if (bestEl) bestEl.textContent = "+" + dollars(bestMoveLive);
     if (givebackEl) givebackEl.textContent = dollars(givebackLive) + (bestMoveLive > 0 ? " (" + Math.round(givebackRatioLive*100) + "%)" : "");
+
+    // V3.2.3: keep rope, Market Read and Entry Tracker synchronized to the
+    // exact same live cents/best/giveback calculation on every price tick.
+    const sameDirectionLive = trackerData.holdDirection ===
+      (trackedEntry.direction === "CALL" ? "BULL" : "BEAR");
+    const oppositeActionLive = trackerData.battleAction ===
+      (trackedEntry.direction === "CALL" ? "PUT_ENTRY_READY" : "CALL_ENTRY_READY");
+    const opposingSideLive = trackedEntry.direction === "CALL" ? "BEARS" : "BULLS";
+    const opposingControlLive = trackerData.battleControl === opposingSideLive;
+    const opposingEvidenceLive = [
+      opposingControlLive,
+      trackerData.stage === "WARNING" || trackerData.stage === "REGIME_BROKEN",
+      trackerData.holdDirection !== "NONE" && !sameDirectionLive,
+      trackerData.changeWatch === "WARNING",
+      oppositeActionLive
+    ].filter(Boolean).length;
+    let verdictLive = "WAIT FOR FRESH DATA";
+    if (trackerData.regularHours && freshCandle) {
+      if (trackerData.stage === "REGIME_BROKEN" || oppositeActionLive ||
+          (givebackRatioLive >= 0.90 && bestMoveLive >= 0.10 && opposingEvidenceLive >= 2))
+        verdictLive = "EXIT WARNING · REVIEW POSITION";
+      else if (givebackRatioLive >= 0.75 && bestMoveLive >= 0.10 && opposingEvidenceLive >= 2)
+        verdictLive = "REVERSAL RISK · PROTECT POSITION";
+      else if (givebackRatioLive >= 0.55 && bestMoveLive >= 0.10 && opposingEvidenceLive >= 1)
+        verdictLive = "PROTECT MOVE · DETERIORATION";
+      else if ((givebackRatioLive >= 0.35 && bestMoveLive >= 0.10) || opposingEvidenceLive >= 2)
+        verdictLive = "WATCH · PULLBACK / WEAKENING";
+      else if (sameDirectionLive && trackerData.stage === "HOLD" && signedMoveLive >= 0)
+        verdictLive = givebackLive > 0 ? "HOLD · NORMAL PULLBACK" : "HOLD · TREND INTACT";
+      else if (signedMoveLive < 0)
+        verdictLive = "WATCH · PRICE AGAINST ENTRY";
+      else
+        verdictLive = "TRACKING · POSITION FAVORABLE";
+    }
+    const weekAlignedLive = trackerData.dailyBias === (trackedEntry.direction === "CALL" ? "BULLISH" : "BEARISH");
+    marketReadHeadline.textContent = trackedEntry.direction + " · " + verdictLive;
+    marketReadMeta.textContent = (weekAlignedLive ? "With 5-day context" : "Against/mixed 5-day context") +
+      " · " + trackerData.battleControl + " latest-candle control" +
+      (bestMoveLive > 0 ? " · Best +" + dollars(bestMoveLive) + " · Giveback " + dollars(givebackLive) +
+        " (" + Math.round(givebackRatioLive * 100) + "%)" : "");
+    trackerState.textContent = trackedEntry.direction + " · " + verdictLive;
+    trackerDetail.textContent = "Entry " + dollars(entryCentsLive / 100) +
+      " · Move " + moveText(signedMoveLive) +
+      (bestMoveLive > 0 ? " · Best +" + dollars(bestMoveLive) + " · Giveback " + dollars(givebackLive) +
+        " (" + Math.round(givebackRatioLive * 100) + "%)" : "");
   } catch (_) { /* Keep last known display if the live endpoint is briefly unavailable. */ }
 }
 syncLivePriceDisplay();
