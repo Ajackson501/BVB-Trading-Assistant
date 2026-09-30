@@ -6146,6 +6146,32 @@ body { padding: clamp(8px, 1.3vw, 16px); }
 .callButton { border:2px solid #8ffac1; background:radial-gradient(circle at 45% 35%,#3bdc8e,#087246); }
 .putButton { border:2px solid #ff9ca5; background:radial-gradient(circle at 45% 35%,#ff747e,#9d1725); }
 .directionButton:disabled { opacity:.45; filter:grayscale(.5); cursor:not-allowed; }
+
+/* V3.2.5 visual setup cues — display only; underlying trading logic is unchanged. */
+.directionButton.setupCue { position:relative; opacity:1; filter:none; }
+.callButton.setupCue {
+  animation:bvbCallSetupPulse 1.65s ease-in-out infinite;
+  box-shadow:0 0 0 3px rgba(104,255,183,.22),0 0 24px rgba(66,255,164,.82);
+}
+.putButton.setupCue {
+  animation:bvbPutSetupPulse 1.65s ease-in-out infinite;
+  box-shadow:0 0 0 3px rgba(255,122,137,.22),0 0 24px rgba(255,78,98,.82);
+}
+.directionButton.setupCue::after {
+  content:"SETUP"; position:absolute; left:50%; bottom:-18px; transform:translateX(-50%);
+  font-size:9px; letter-spacing:.12em; font-weight:1000; white-space:nowrap;
+  color:#f5f7fa; text-shadow:0 1px 5px #000;
+}
+@keyframes bvbCallSetupPulse {
+  0%,100% { transform:scale(1); box-shadow:0 0 0 2px rgba(104,255,183,.18),0 0 14px rgba(66,255,164,.52); }
+  50% { transform:scale(1.045); box-shadow:0 0 0 5px rgba(104,255,183,.28),0 0 34px rgba(66,255,164,.95); }
+}
+@keyframes bvbPutSetupPulse {
+  0%,100% { transform:scale(1); box-shadow:0 0 0 2px rgba(255,122,137,.18),0 0 14px rgba(255,78,98,.52); }
+  50% { transform:scale(1.045); box-shadow:0 0 0 5px rgba(255,122,137,.28),0 0 34px rgba(255,78,98,.95); }
+}
+@media (prefers-reduced-motion:reduce) { .directionButton.setupCue { animation:none; } }
+
 #endTrackingButton { border:1px solid #e4c36f; background:#263340; color:#f6d57a; border-radius:12px; padding:12px; font-weight:900; cursor:pointer; }
 .cockpitCenter.trackingActive { flex-direction:column; height:104px; border-radius:18px; box-shadow:0 0 0 2px #27313e; }
 #activeEntryLabel { color:#f5d884; font-weight:900; font-size:12px; letter-spacing:.04em; text-align:center; }
@@ -6581,6 +6607,19 @@ if (trackedEntry) {
   trackerDetail.textContent = "After placing your trade, press its button to track GOOGL from that point.";
   callButton.disabled = !canMark;
   putButton.disabled = !canMark;
+
+  // Presentation-only cue driven by the engine's existing entry-ready state.
+  callButton.classList.remove("setupCue");
+  putButton.classList.remove("setupCue");
+  callButton.removeAttribute("aria-label");
+  putButton.removeAttribute("aria-label");
+  if (canMark && trackerData.battleAction === "CALL_ENTRY_READY") {
+    callButton.classList.add("setupCue");
+    callButton.setAttribute("aria-label", "CALL — favorable setup detected");
+  } else if (canMark && trackerData.battleAction === "PUT_ENTRY_READY") {
+    putButton.classList.add("setupCue");
+    putButton.setAttribute("aria-label", "PUT — favorable setup detected");
+  }
   function markEntry(direction) {
     if (!canMark) return;
     if (Date.now() - Date.parse(trackerData.liveTime) >= 30000) {
