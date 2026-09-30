@@ -6195,12 +6195,25 @@ body.trade-active .entryGauge { box-shadow:0 0 0 1px rgba(255,220,121,.22); }
 .positionBest { top:43%; width:16px; height:16px; background:#c39cff; border:2px solid #f0e5ff; transform:translate(-50%,-50%) rotate(45deg); box-shadow:0 0 12px #af80ff; }
 .positionBest span { position:absolute; transform:rotate(-45deg); left:-9px; top:18px; color:#d8bbff; font-size:9px; font-weight:1000; }
 .positionCurrent { top:43%; width:12px; height:28px; border-radius:8px; background:#55b7ff; box-shadow:0 0 11px #42aaff; transform:translate(-50%,-50%); }
-.positionCurrent span { position:absolute; left:50%; top:28px; transform:translateX(-50%); color:#73c9ff; font-size:9px; font-weight:1000; white-space:nowrap; }
+.positionCurrent span { display:none; }
 .positionGiveback { position:absolute; z-index:7; top:calc(43% - 5px); height:10px; background:rgba(255,103,119,.60); box-shadow:0 0 8px rgba(255,103,119,.5); border-radius:7px; }
 .positionSideLabel { position:absolute; z-index:11; top:57%; font-size:9px; font-weight:900; letter-spacing:.04em; }
 .positionLeft { left:31%; color:#ff8f9a; }
 .positionRight { right:31%; color:#80ffc0; }
-.positionStats { position:absolute; z-index:14; left:50%; bottom:2px; transform:translateX(-50%); width:min(94%,760px); text-align:center; font-size:10px; font-weight:850; color:#f2f5f8; text-shadow:0 1px 3px #000; }
+.positionStats { position:absolute; z-index:14; left:50%; bottom:0; transform:translateX(-50%); width:min(92%,720px); display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; text-align:center; text-shadow:0 1px 3px #000; }
+.positionMetric { min-width:0; padding:3px 7px 2px; border-radius:8px; background:rgba(7,12,18,.72); border:1px solid rgba(255,255,255,.08); }
+.positionMetricLabel { display:block; color:#9aa7b7; font-size:clamp(7px,.75vw,9px); font-weight:900; letter-spacing:.12em; line-height:1; }
+.positionMetricValue { display:block; margin-top:2px; color:#f5f7fa; font:1000 clamp(14px,1.7vw,22px)/1 ui-monospace,SFMono-Regular,Menlo,monospace; white-space:nowrap; }
+.positionMetric.giveback .positionMetricValue { color:#ff9ba5; }
+@media (max-width:700px) and (orientation:portrait) {
+  .positionStats { width:94%; gap:4px; }
+  .positionMetric { padding:2px 3px; }
+  .positionMetricValue { font-size:clamp(12px,3.3vw,17px); }
+}
+@media (orientation:landscape) and (max-height:600px) {
+  .positionStats { bottom:-1px; gap:5px; }
+  .positionMetricValue { font-size:14px; }
+}
 body.trade-active .centerLabel { color:#f6cd72; font-weight:1000; }
 body.trade-active .centerLine { background:#f6cd72; box-shadow:0 0 8px rgba(246,205,114,.55); }
 body.trade-active .knot { display:none; }
@@ -6220,8 +6233,8 @@ body.trade-active .pressureSupport { display:none; }
         BVB V2 — LIVE TREND BATTLE
       </div>
 
-      <div class="price">
-        GOOGL $${Number(battle.price || 0).toFixed(2)}
+      <div class="price" id="liveHeaderPrice">
+        GOOGL $${Number(latestGOOGLTrade?.price || battle.price || 0).toFixed(2)}
       </div>
     </div>
 
@@ -6516,8 +6529,8 @@ if (trackedEntry) {
 
   trackerState.textContent = trackedEntry.direction + " · " + verdict;
   trackerDetail.textContent = "Entry " + dollars(entryCents / 100) +
-    (signedMove === null ? " · Current price unavailable" :
-      " · Current " + dollars(currentCents / 100) + " · Directional move " + moveText(signedMove) +
+    (signedMove === null ? " · Live price unavailable" :
+      " · Move " + moveText(signedMove) +
       (bestObservedMove > 0 ? " · Best +" + dollars(bestObservedMove) + " · Giveback " + dollars(giveback) +
         " (" + Math.round(givebackRatio * 100) + "%)" : ""));
   callButton.hidden = true; putButton.hidden = true; endButton.hidden = false;
@@ -6546,10 +6559,10 @@ if (trackedEntry) {
         positionGiveback.hidden = false;
       }
     }
-    positionStats.textContent = trackedEntry.direction + " · Entry " + dollars(entryCents/100) +
-      " · Current " + dollars(currentCents/100) + " · Move " + moveText(signedMove) +
-      " · Best +" + dollars(bestObservedMove) + " · Giveback " + dollars(giveback || 0) +
-      (bestObservedMove > 0 ? " (" + Math.round(givebackRatio*100) + "%)" : "");
+    positionStats.innerHTML =
+      '<div class="positionMetric"><span class="positionMetricLabel">MOVE</span><span class="positionMetricValue" id="positionMoveValue">' + moveText(signedMove) + '</span></div>' +
+      '<div class="positionMetric"><span class="positionMetricLabel">BEST</span><span class="positionMetricValue" id="positionBestValue">+' + dollars(bestObservedMove) + '</span></div>' +
+      '<div class="positionMetric giveback"><span class="positionMetricLabel">GIVEBACK</span><span class="positionMetricValue" id="positionGivebackValue">' + dollars(giveback || 0) + (bestObservedMove > 0 ? ' (' + Math.round(givebackRatio*100) + '%)' : '') + '</span></div>';
     positionStats.hidden = false;
   } else {
     positionStats.textContent = "Waiting for a fresh GOOGL price; saved entry and best move are preserved.";
@@ -6590,6 +6603,60 @@ if (trackedEntry) {
   callButton.addEventListener("click", () => markEntry("CALL"));
   putButton.addEventListener("click", () => markEntry("PUT"));
 }
+// V3.2.2: one primary live GOOGL price, synchronized from the same trade feed.
+// Strategy decisions still use their existing completed-candle logic.
+const liveHeaderPrice = document.getElementById("liveHeaderPrice");
+async function syncLivePriceDisplay() {
+  try {
+    const response = await fetch("/googl-live", { cache:"no-store" });
+    if (!response.ok) return;
+    const live = await response.json();
+    const price = Number(live?.latestTrade?.price);
+    if (!Number.isFinite(price) || price <= 0) return;
+    liveHeaderPrice.textContent = "GOOGL " + dollars(price);
+
+    if (!trackedEntry) return;
+    const entryCentsLive = cents(trackedEntry.price);
+    const currentCentsLive = cents(price);
+    const rawMoveCentsLive = currentCentsLive - entryCentsLive;
+    const signedCentsLive = rawMoveCentsLive * (trackedEntry.direction === "CALL" ? 1 : -1);
+    const previousBestLive = Math.max(0, cents(trackedEntry.bestObservedMove || 0));
+    const bestCentsLive = Math.max(previousBestLive, signedCentsLive);
+    const signedMoveLive = signedCentsLive / 100;
+    const bestMoveLive = bestCentsLive / 100;
+    const givebackLive = bestCentsLive > 0 ? Math.max(0, bestCentsLive - signedCentsLive) / 100 : 0;
+    const givebackRatioLive = bestMoveLive > 0 ? givebackLive / bestMoveLive : 0;
+    if (bestCentsLive > previousBestLive) {
+      trackedEntry.bestObservedMove = bestMoveLive;
+      try { localStorage.setItem(trackerKey, JSON.stringify(trackedEntry)); } catch (_) {}
+    }
+
+    const displayPercentLive = Math.max(31, Math.min(69, 50 + (rawMoveCentsLive / 100) * 9.5));
+    positionCurrent.style.left = displayPercentLive + "%";
+    positionCurrent.hidden = false;
+    if (bestMoveLive > 0) {
+      const bestRawMoveLive = bestMoveLive * (trackedEntry.direction === "CALL" ? 1 : -1);
+      const bestPercentLive = Math.max(31, Math.min(69, 50 + bestRawMoveLive * 9.5));
+      positionBest.style.left = bestPercentLive + "%";
+      positionBest.hidden = false;
+      if (givebackLive > 0) {
+        positionGiveback.style.left = Math.min(bestPercentLive, displayPercentLive) + "%";
+        positionGiveback.style.width = Math.abs(bestPercentLive - displayPercentLive) + "%";
+        positionGiveback.hidden = false;
+      } else {
+        positionGiveback.hidden = true;
+      }
+    }
+    const moveEl = document.getElementById("positionMoveValue");
+    const bestEl = document.getElementById("positionBestValue");
+    const givebackEl = document.getElementById("positionGivebackValue");
+    if (moveEl) moveEl.textContent = moveText(signedMoveLive);
+    if (bestEl) bestEl.textContent = "+" + dollars(bestMoveLive);
+    if (givebackEl) givebackEl.textContent = dollars(givebackLive) + (bestMoveLive > 0 ? " (" + Math.round(givebackRatioLive*100) + "%)" : "");
+  } catch (_) { /* Keep last known display if the live endpoint is briefly unavailable. */ }
+}
+syncLivePriceDisplay();
+setInterval(syncLivePriceDisplay, 1000);
 setTimeout(() => window.location.reload(), 10000);
 </script>
 
