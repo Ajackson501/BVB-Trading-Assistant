@@ -78,6 +78,9 @@ let alpacaStreamStatus = "connecting";
 let developingCandle = null;
 
 let completedCandles = [];
+let riderCandles5m = [];
+let riderCandles15m = [];
+const developingRiderCandles = { 5: null, 15: null };
 
 // Trend Event History
 const MAX_TREND_EVENTS = 100;
@@ -96,10 +99,11 @@ let dailyHistorySeeded = false;
 
 
 // ==================================================
-// INDEPENDENT PAPER-TRADING STUDY — OLIVER + AGENT C
+// INDEPENDENT PAPER-TRADING STUDY — OLIVER + AGENT C + RIDER
 // ==================================================
-// Uses the SAME completed 2-minute GOOGL candles already received by BVB.
-// No additional Alpaca stream or per-agent market-data requests are opened.
+// Uses the same GOOGL trade stream already received by BVB. Rider also loads
+// completed 5-minute and 15-minute history once at startup and aggregates both
+// timeframes from that same stream; no additional WebSocket is opened.
 // Dashboard UI is intentionally unchanged.
 //
 // Persistence: set PAPER_JOURNAL_FILE to a path on a Render Persistent Disk
@@ -110,7 +114,11 @@ let dailyHistorySeeded = false;
 const PAPER_JOURNAL_FILE =
   process.env.PAPER_JOURNAL_FILE || path.join(__dirname, "bvb-paper-study.json");
 
-const PAPER_STUDY_VERSION = "Oliver-v1.2_vs_AgentC-v1";
+const PAPER_STUDY_VERSION = "Oliver-v1.2_vs_AgentC-v1_vs_Rider-v1";
+
+function newPaperAgentState() {
+  return { position: null, trades: [], decisions: [], lastProcessedCandle: null, lastEvaluation: null };
+}
 
 let paperStudy = {
   version: PAPER_STUDY_VERSION,
@@ -118,8 +126,9 @@ let paperStudy = {
   timeframe: "2Min",
   updatedAt: null,
   agents: {
-    Oliver: { position: null, trades: [], decisions: [] },
-    AgentC: { position: null, trades: [], decisions: [] }
+    Oliver: newPaperAgentState(),
+    AgentC: newPaperAgentState(),
+    Rider: newPaperAgentState()
   }
 };
 
@@ -130,6 +139,15 @@ function loadPaperStudy() {
     if (parsed?.agents?.Oliver && parsed?.agents?.AgentC) {
       paperStudy = parsed;
       paperStudy.version = PAPER_STUDY_VERSION;
+      // Migrate earlier Oliver/Agent C journals without discarding their data.
+      if (!paperStudy.agents.Rider) paperStudy.agents.Rider = newPaperAgentState();
+      for (const name of ["Oliver", "AgentC", "Rider"]) {
+        const agent = paperStudy.agents[name];
+        if (!Array.isArray(agent.trades)) agent.trades = [];
+        if (!Array.isArray(agent.decisions)) agent.decisions = [];
+        if (!("lastProcessedCandle" in agent)) agent.lastProcessedCandle = null;
+        if (!("lastEvaluation" in agent)) agent.lastEvaluation = null;
+      }
       console.log(`Paper study loaded from ${PAPER_JOURNAL_FILE}`);
     }
   } catch (error) {
@@ -272,12 +290,100 @@ function analyzeAgentCPaper(candles) {
   };
 }
 
+function analyzeRiderPaper(candles2m, candles5m, candles15m) {
+  if (candles15m.length < 200 || candles5m.length < 20 || candles2m.length < 8) {
+    return { signal: "WAIT", reason: "Waiting for completed 15-minute, 5-minute, and 2-minute history." };
+  }
+  const c2 = candles2m[candles2m.length - 1];
+  const p2 = candles2m[candles2m.length - 2];
+  const c5 = candles5m[candles5m.length - 1];
+  const c15 = candles15m[candles15m.length - 1];
+  const sma8_5 = calculateSMA(candles5m, 8);
+  const sma20_5 = calculateSMA(candles5m, 20);
+  const prev8_5 = calculatePreviousSMA(candles5m, 8);
+  const sma20_15 = calculateSMA(candles15m, 20);
+  const prev20_15 = calculatePreviousSMA(candles15m, 20);
+  const sma200_15 = calculateSMA(candles15m, 200);
+  const bias = Number(c15.close) > sma200_15 ? "BULLISH" : Number(c15.close) < sma200_15 ? "BEARISH" : "NEUTRAL";
+  const context = Number(c15.close) > sma20_15 && sma20_15 >= prev20_15
+    ? "BULLISH" : Number(c15.close) < sma20_15 && sma20_15 <= prev20_15 ? "BEARISH" : "NEUTRAL";
+  const shortTrend = Number(c5.close) > sma20_5 && sma8_5 > sma20_5 && sma8_5 >= prev8_5
+    ? "BULLISH" : Number(c5.close) < sma20_5 && sma8_5 < sma20_5 && sma8_5 <= prev8_5 ? "BEARISH" : "NEUTRAL";
+  const prior2 = candles2m.slice(-4, -1);
+  const priorHigh = Math.max(...prior2.map(c => Number(c.high)));
+  const priorLow = Math.min(...prior2.map(c => Number(c.low)));
+  const currentRange = Number(c2.high) - Number(c2.low);
+  const compressed = prior2.every(c => Number(c.high) - Number(c.low) <= currentRange * 0.8);
+  const recent5 = candles5m.slice(-5, -1);
+  const bullishPullback = recent5.some((c, i) => i > 0 && Number(c.close) < Number(recent5[i - 1].close));
+  const bearishPullback = recent5.some((c, i) => i > 0 && Number(c.close) > Number(recent5[i - 1].close));
+  const bullishTakeover = Number(c2.close) > Number(c2.open) && Number(c2.close) > Number(p2.high);
+  const bearishTakeover = Number(c2.close) < Number(c2.open) && Number(c2.close) < Number(p2.low);
+  const higherLow = Number(c2.low) > Math.min(...candles2m.slice(-7, -3).map(c => Number(c.low)));
+  const lowerHigh = Number(c2.high) < Math.max(...candles2m.slice(-7, -3).map(c => Number(c.high)));
+  const call = bias === "BULLISH" && context === "BULLISH" && shortTrend === "BULLISH" &&
+    bullishPullback && higherLow && Number(c2.close) > priorHigh && (bullishTakeover || compressed);
+  const put = bias === "BEARISH" && context === "BEARISH" && shortTrend === "BEARISH" &&
+    bearishPullback && lowerHigh && Number(c2.close) < priorLow && (bearishTakeover || compressed);
+  return {
+    signal: call ? "CALL" : put ? "PUT" : "WAIT",
+    reason: call ? "15-minute bullish bias and context align with the 5-minute trend; a 2-minute higher low held and price broke the recent swing after a pullback." :
+      put ? "15-minute bearish bias and context align with the 5-minute trend; a 2-minute lower high held and price broke the recent swing after a bounce." :
+      "Rider is waiting for aligned 15-minute bias/context, 5-minute trend/location, and a confirmed 2-minute trigger.",
+    bias, context, shortTrend,
+    sma8_5: Number(sma8_5.toFixed(4)), sma20_5: Number(sma20_5.toFixed(4)), sma200_15: Number(sma200_15.toFixed(4)),
+    pullback: call ? bullishPullback : put ? bearishPullback : false,
+    trigger: call || put ? (compressed ? "COMPRESSION_BREAK" : "TAKEOVER_BREAK") : "NONE",
+    timeframeNote: "Rider evaluates real completed 15-minute context, 5-minute trend/location, and 2-minute execution candles built from the existing live trade stream."
+  };
+}
+
+function runRiderPaperTrader(candles) {
+  const candle = candles[candles.length - 1];
+  if (!candle || !regularSessionForCandle(candle)) return;
+  const agent = paperStudy.agents.Rider;
+  const analysis = analyzeRiderPaper(candles, riderCandles5m, riderCandles15m);
+  agent.lastProcessedCandle = candle.time;
+  agent.lastEvaluation = { time: candle.time, signal: analysis.signal, reason: analysis.reason };
+
+  if (agent.position) {
+    updatePaperExcursion(agent.position, candle);
+    const p = agent.position;
+    const invalidated = p.direction === "CALL"
+      ? Number(candle.close) < Number(p.entryMetadata?.structureLow) || analysis.bias !== "BULLISH" || analysis.shortTrend === "BEARISH"
+      : Number(candle.close) > Number(p.entryMetadata?.structureHigh) || analysis.bias !== "BEARISH" || analysis.shortTrend === "BULLISH";
+    const opposite = (p.direction === "CALL" && analysis.signal === "PUT") ||
+      (p.direction === "PUT" && analysis.signal === "CALL");
+    if (invalidated) {
+      closePaperPosition("Rider", candle, "Rider's 2-minute swing structure broke on a candle close.", { analysis });
+    } else if (opposite) {
+      closePaperPosition("Rider", candle, "Opposing Rider setup confirmed.", { analysis });
+    }
+    return;
+  }
+
+  if (analysis.signal === "CALL" || analysis.signal === "PUT") {
+    const recent = candles.slice(-8, -1);
+    openPaperPosition("Rider", analysis.signal, candle, analysis.reason, {
+      ...analysis,
+      structureLow: Math.min(...recent.map(c => Number(c.low))),
+      structureHigh: Math.max(...recent.map(c => Number(c.high)))
+    });
+  }
+}
+
 function runOliverPaperTrader(candles) {
   if (candles.length < 200) return;
   const candle = candles[candles.length - 1];
   if (!regularSessionForCandle(candle)) return;
   const agent = paperStudy.agents.Oliver;
   const analysis = analyzeOliver(candles);
+  agent.lastEvaluation = {
+    time: candle.time,
+    signal: agent.position ? `HOLD_${agent.position.direction}` :
+      analysis.action === "CALL_SETUP" ? "CALL" : analysis.action === "PUT_SETUP" ? "PUT" : "WAIT",
+    reason: agent.position ? "Managing an open paper position." : analysis.reason || "No Oliver entry setup."
+  };
 
   if (agent.position) {
     updatePaperExcursion(agent.position, candle);
@@ -322,6 +428,11 @@ function runAgentCPaperTrader(candles) {
   if (!regularSessionForCandle(candle)) return;
   const agent = paperStudy.agents.AgentC;
   const analysis = analyzeAgentCPaper(candles);
+  agent.lastEvaluation = {
+    time: candle.time,
+    signal: agent.position ? `HOLD_${agent.position.direction}` : analysis.signal,
+    reason: agent.position ? "Managing an open paper position." : analysis.reason
+  };
 
   if (agent.position) {
     updatePaperExcursion(agent.position, candle);
@@ -347,9 +458,21 @@ function runAgentCPaperTrader(candles) {
 }
 
 function runIndependentPaperStudy(candles) {
+  if (!candles.length) return;
   try {
+    const candle = candles[candles.length - 1];
+    if (!regularSessionForCandle(candle)) return;
     runOliverPaperTrader(candles);
     runAgentCPaperTrader(candles);
+    runRiderPaperTrader(candles);
+    for (const name of ["Oliver", "AgentC", "Rider"]) {
+      paperStudy.agents[name].lastProcessedCandle = candle.time;
+    }
+    savePaperStudy();
+    for (const name of ["Oliver", "AgentC", "Rider"]) {
+      const agent = paperStudy.agents[name];
+      console.log(`${name} PAPER CHECK ${candle.time} — ${agent.lastEvaluation?.signal || "WAIT"}${agent.position ? `; POSITION ${agent.position.direction} @ ${agent.position.entryPrice}` : "; FLAT"}`);
+    }
   } catch (error) {
     console.error("Independent paper-study error:", error);
   }
@@ -365,7 +488,7 @@ function closePaperPositionsAtSessionEnd() {
   }).format(new Date());
   const [h, m] = nowET.split(":").map(Number);
   if ((h * 60 + m) < 960) return;
-  for (const name of ["Oliver", "AgentC"]) {
+  for (const name of ["Oliver", "AgentC", "Rider"]) {
     const pos = paperStudy.agents[name].position;
     if (pos && studyDateKey(pos.entryTime) === studyDateKey(new Date())) {
       closePaperPosition(name, last, "Regular market session ended.");
@@ -394,7 +517,13 @@ function paperDailySummary(dateKey = studyDateKey(new Date())) {
     timeframe: "2Min",
     note: "Results measure GOOGL underlying movement from paper entry to paper exit; they are not option-contract P/L.",
     Oliver: summarize("Oliver"),
-    AgentC: summarize("AgentC")
+    AgentC: summarize("AgentC"),
+    Rider: summarize("Rider"),
+    agentHealth: Object.fromEntries(["Oliver", "AgentC", "Rider"].map(name => [name, {
+      lastProcessedCandle: paperStudy.agents[name].lastProcessedCandle,
+      lastEvaluation: paperStudy.agents[name].lastEvaluation,
+      activePosition: paperStudy.agents[name].position
+    }]))
   };
 }
 
@@ -718,6 +847,49 @@ async function seedHistoricalCandles() {
 
 }
 
+async function seedRiderBars(timeframeMinutes, targetName) {
+  if (!ALPACA_API_KEY || !ALPACA_SECRET_KEY) return;
+  try {
+    const end = new Date();
+    const start = new Date();
+    start.setUTCDate(start.getUTCDate() - 30);
+    const params = new URLSearchParams({
+      timeframe: `${timeframeMinutes}Min`, start: start.toISOString(), end: end.toISOString(),
+      limit: "1000", feed: "iex", adjustment: "raw"
+    });
+    const response = await fetch(`https://data.alpaca.markets/v2/stocks/GOOGL/bars?${params.toString()}`, {
+      headers: { "APCA-API-KEY-ID": ALPACA_API_KEY, "APCA-API-SECRET-KEY": ALPACA_SECRET_KEY }
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      console.error(`Rider ${timeframeMinutes}-minute history seed failed:`, response.status, data);
+      return;
+    }
+    const nowMs = Date.now();
+    const bars = (data.bars || []).map(normalizeBar)
+      .filter(bar => new Date(bar.time).getTime() + timeframeMinutes * 60 * 1000 <= nowMs)
+      .sort((a, b) => new Date(a.time) - new Date(b.time));
+    if (targetName === "5m") riderCandles5m = bars.slice(-1000);
+    else riderCandles15m = bars.slice(-1000);
+    console.log(`Rider ${timeframeMinutes}-minute history seed complete: ${bars.length} bars loaded.`);
+  } catch (error) {
+    console.error(`Rider ${timeframeMinutes}-minute history seed error:`, error.message);
+  }
+}
+
+function addCompletedRiderCandle(timeframeMinutes, candle) {
+  const target = timeframeMinutes === 5 ? riderCandles5m : riderCandles15m;
+  const normalized = {
+    time: candle.time, open: Number(candle.open), high: Number(candle.high),
+    low: Number(candle.low), close: Number(candle.close), volume: Number(candle.volume) || 0
+  };
+  const index = target.findIndex(bar => bar.time === normalized.time);
+  if (index >= 0) target[index] = normalized;
+  else target.push(normalized);
+  target.sort((a, b) => new Date(a.time) - new Date(b.time));
+  if (target.length > 1000) target.splice(0, target.length - 1000);
+}
+
 
 // ==================================================
 // SEED COMPLETED DAILY HISTORY FROM ALPACA
@@ -802,6 +974,30 @@ async function seedDailyCandles() {
 // ==================================================
 // BUILD LIVE 2-MINUTE CANDLE
 // ==================================================
+
+function updateDevelopingRiderCandles(trade) {
+  const price = Number(trade.price);
+  const size = Number(trade.size) || 0;
+  const tradeTime = new Date(trade.time);
+  if (!Number.isFinite(price) || Number.isNaN(tradeTime.getTime())) return;
+  for (const minutes of [5, 15]) {
+    const duration = minutes * 60 * 1000;
+    const bucketStart = Math.floor(tradeTime.getTime() / duration) * duration;
+    const bucketTime = new Date(bucketStart).toISOString();
+    let candle = developingRiderCandles[minutes];
+    if (!candle || candle.time !== bucketTime) {
+      if (candle) addCompletedRiderCandle(minutes, candle);
+      developingRiderCandles[minutes] = {
+        time: bucketTime, open: price, high: price, low: price, close: price, volume: size
+      };
+      continue;
+    }
+    candle.high = Math.max(candle.high, price);
+    candle.low = Math.min(candle.low, price);
+    candle.close = price;
+    candle.volume += size;
+  }
+}
 
 function updateDevelopingCandle(trade) {
 
@@ -1256,6 +1452,7 @@ function connectAlpacaStream() {
           };
 
 
+          updateDevelopingRiderCandles(latestGOOGLTrade);
           updateDevelopingCandle(
             latestGOOGLTrade
           );
@@ -4526,6 +4723,8 @@ app.get(
 
 seedHistoricalCandles();
 seedDailyCandles();
+seedRiderBars(5, "5m");
+seedRiderBars(15, "15m");
 
 connectAlpacaStream();
 
@@ -6146,32 +6345,6 @@ body { padding: clamp(8px, 1.3vw, 16px); }
 .callButton { border:2px solid #8ffac1; background:radial-gradient(circle at 45% 35%,#3bdc8e,#087246); }
 .putButton { border:2px solid #ff9ca5; background:radial-gradient(circle at 45% 35%,#ff747e,#9d1725); }
 .directionButton:disabled { opacity:.45; filter:grayscale(.5); cursor:not-allowed; }
-
-/* V3.2.5 visual setup cues — display only; underlying trading logic is unchanged. */
-.directionButton.setupCue { position:relative; opacity:1; filter:none; }
-.callButton.setupCue {
-  animation:bvbCallSetupPulse 1.65s ease-in-out infinite;
-  box-shadow:0 0 0 3px rgba(104,255,183,.22),0 0 24px rgba(66,255,164,.82);
-}
-.putButton.setupCue {
-  animation:bvbPutSetupPulse 1.65s ease-in-out infinite;
-  box-shadow:0 0 0 3px rgba(255,122,137,.22),0 0 24px rgba(255,78,98,.82);
-}
-.directionButton.setupCue::after {
-  content:"SETUP"; position:absolute; left:50%; bottom:-18px; transform:translateX(-50%);
-  font-size:9px; letter-spacing:.12em; font-weight:1000; white-space:nowrap;
-  color:#f5f7fa; text-shadow:0 1px 5px #000;
-}
-@keyframes bvbCallSetupPulse {
-  0%,100% { transform:scale(1); box-shadow:0 0 0 2px rgba(104,255,183,.18),0 0 14px rgba(66,255,164,.52); }
-  50% { transform:scale(1.045); box-shadow:0 0 0 5px rgba(104,255,183,.28),0 0 34px rgba(66,255,164,.95); }
-}
-@keyframes bvbPutSetupPulse {
-  0%,100% { transform:scale(1); box-shadow:0 0 0 2px rgba(255,122,137,.18),0 0 14px rgba(255,78,98,.52); }
-  50% { transform:scale(1.045); box-shadow:0 0 0 5px rgba(255,122,137,.28),0 0 34px rgba(255,78,98,.95); }
-}
-@media (prefers-reduced-motion:reduce) { .directionButton.setupCue { animation:none; } }
-
 #endTrackingButton { border:1px solid #e4c36f; background:#263340; color:#f6d57a; border-radius:12px; padding:12px; font-weight:900; cursor:pointer; }
 .cockpitCenter.trackingActive { flex-direction:column; height:104px; border-radius:18px; box-shadow:0 0 0 2px #27313e; }
 #activeEntryLabel { color:#f5d884; font-weight:900; font-size:12px; letter-spacing:.04em; text-align:center; }
@@ -6607,19 +6780,6 @@ if (trackedEntry) {
   trackerDetail.textContent = "After placing your trade, press its button to track GOOGL from that point.";
   callButton.disabled = !canMark;
   putButton.disabled = !canMark;
-
-  // Presentation-only cue driven by the engine's existing entry-ready state.
-  callButton.classList.remove("setupCue");
-  putButton.classList.remove("setupCue");
-  callButton.removeAttribute("aria-label");
-  putButton.removeAttribute("aria-label");
-  if (canMark && trackerData.battleAction === "CALL_ENTRY_READY") {
-    callButton.classList.add("setupCue");
-    callButton.setAttribute("aria-label", "CALL — favorable setup detected");
-  } else if (canMark && trackerData.battleAction === "PUT_ENTRY_READY") {
-    putButton.classList.add("setupCue");
-    putButton.setAttribute("aria-label", "PUT — favorable setup detected");
-  }
   function markEntry(direction) {
     if (!canMark) return;
     if (Date.now() - Date.parse(trackerData.liveTime) >= 30000) {
@@ -6766,6 +6926,10 @@ app.get("/paper-study", authorizeBVBEvents, (req, res) => {
     version: paperStudy.version,
     symbol: paperStudy.symbol,
     timeframe: paperStudy.timeframe,
+    strategyNotes: {
+      Rider: "Separate experimental paper study: 15-minute bias/context, 5-minute trend/location, and 2-minute pullback confirmation. Higher timeframes are seeded once from Alpaca and then aggregated from the existing live GOOGL trade stream.",
+      RiderHistory: { bars5m: riderCandles5m.length, bars15m: riderCandles15m.length, required15mBars: 200 }
+    },
     updatedAt: paperStudy.updatedAt,
     persistenceFile: PAPER_JOURNAL_FILE,
     agents: paperStudy.agents
@@ -6777,7 +6941,11 @@ app.get("/paper-study/daily", authorizeBVBEvents, (req, res) => {
   const dateKey = /^\d{4}-\d{2}-\d{2}$/.test(requested)
     ? requested
     : studyDateKey(new Date());
-  res.json(paperDailySummary(dateKey));
+  res.json({
+    ...paperDailySummary(dateKey),
+    updatedAt: paperStudy.updatedAt,
+    version: paperStudy.version
+  });
 });
 
 // ==================================================
