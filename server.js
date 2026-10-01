@@ -4,6 +4,49 @@ const path = require("path");
 const crypto = require("crypto");
 const fs = require("fs");
 
+// V3.2.7 experimental, informational only. No orders or strategy changes.
+function analyzeChopRisk(candles) {
+  const bars = Array.isArray(candles) ? candles.slice(-9) : [];
+  if (bars.length < 9 || bars.some((b, i) =>
+    ![b.open,b.high,b.low,b.close].every(Number.isFinite) ||
+    b.high < Math.max(b.open,b.close) || b.low > Math.min(b.open,b.close) ||
+    !Number.isFinite(Date.parse(b.time)) ||
+    (i > 0 && Date.parse(b.time) - Date.parse(bars[i-1].time) !== 120000))) {
+    return { state: 'WAIT', reason: 'Building recent candle history.' };
+  }
+  function measure(window) {
+    let travel = 0, overlaps = 0, flips = 0, wickBars = 0;
+    const ranges = window.map(b => b.high-b.low);
+    for (let i=0;i<window.length;i++) {
+      const b=window[i], range=ranges[i];
+      if (range > 0 && (b.high-Math.max(b.open,b.close))/range >= 0.2 &&
+          (Math.min(b.open,b.close)-b.low)/range >= 0.2) wickBars++;
+      if (!i) continue;
+      const p=window[i-1];
+      travel += Math.abs(b.close-p.close);
+      const smaller=Math.min(range,ranges[i-1]);
+      if (smaller > 0 && Math.max(0,Math.min(b.high,p.high)-Math.max(b.low,p.low))/smaller >= 0.5) overlaps++;
+      if ((b.close-b.open)*(p.close-p.open) < 0) flips++;
+    }
+    const meanRange=ranges.reduce((a,b)=>a+b,0)/window.length;
+    const efficiency=travel > 0 ? Math.abs(window.at(-1).close-window[0].close)/travel : 0;
+    const lowProgress=efficiency <= 0.3;
+    const overlap=overlaps >= 4;
+    const alternating=flips >= 3;
+    const twoSided=wickBars >= 4;
+    const first=window.slice(0,4).reduce((s,b)=>s+b.close,0)/4;
+    const last=window.slice(-4).reduce((s,b)=>s+b.close,0)/4;
+    const flat=meanRange > 0 && Math.abs(last-first) <= 0.5*meanRange;
+    const score=[overlap,alternating,twoSided,flat].filter(Boolean).length;
+    return { strong:meanRange > 0 && lowProgress && overlap && score >= 3,
+      caution:meanRange > 0 && lowProgress && overlap && score >= 2 };
+  }
+  const current=measure(bars.slice(-8)), previous=measure(bars.slice(0,8));
+  return { state: current.strong && previous.strong ? 'CHOP' :
+      current.caution || (previous.strong && current.strong) ? 'CAUTION' : 'CLEAR',
+    analyzedCandle:bars.at(-1).time };
+}
+
 const app = express();
 app.use(express.json());
 
@@ -5465,6 +5508,11 @@ function buildFiveBoxStrength(candles, battleState) {
 }
 
 const fiveBoxStrength = buildFiveBoxStrength(completedCandles, battle);
+const chopRisk = analyzeChopRisk(completedCandles);
+const chopAge = Date.now() - Date.parse(chopRisk.analyzedCandle);
+const chopFresh = alpacaStreamStatus === "connected" && Number.isFinite(chopAge) && chopAge >= 0 && chopAge < 6 * 60 * 1000;
+const chopVisible = regularHours && chopFresh && (chopRisk.state === "CHOP" || chopRisk.state === "CAUTION");
+
 const strengthBoxes = (side, count) =>
   Array.from({ length: 5 }, (_, i) =>
     `<span class="strengthBox ${side} ${i < count ? "on" : ""}"></span>`
@@ -6440,6 +6488,8 @@ body.trade-active .centerLine { background:#f6cd72; box-shadow:0 0 8px rgba(246,
 body.trade-active .knot { display:none; }
 body.trade-active .pressureSupport { display:none; }
 
+.chopWarning { margin-top:6px; padding:6px 8px; border:1px solid #f5bf45; border-radius:8px; background:#382b13; color:#ffe5a1; font-size:12px; line-height:1.35; overflow-wrap:anywhere; }
+.chopBasis { display:block; margin-top:3px; font-size:10px; opacity:.85; }
 </style>
 </head>
 
@@ -6542,6 +6592,8 @@ body.trade-active .pressureSupport { display:none; }
     <div class="actionBox">
       <div class="action">${dashboardSignal.title}</div>
       <div class="phase">${dashboardSignal.detail} · ${battlePhase}</div>
+      ${chopVisible ? `<div class="chopWarning" role="status"><strong>${chopRisk.state === "CHOP" ? "⚠ CHOP WARNING · POOR FOLLOW-THROUGH" : "⚠ CAUTION · POSSIBLE CHOP"}</strong><br>Recent price movement is overlapping with limited progress. New trend entries may be less reliable. This is not an exit signal.<span class="chopBasis">Completed 2-minute candles · experimental warning</span></div>` : ""}
+
     </div>
 
     <div class="aiReadBox holdBox">
