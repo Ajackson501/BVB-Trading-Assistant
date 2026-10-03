@@ -509,7 +509,12 @@ function runIndependentPaperStudy(candles) {
     runAgentCPaperTrader(candles);
     runRiderPaperTrader(candles);
     for (const name of ["Oliver", "AgentC", "Rider"]) {
-      paperStudy.agents[name].lastProcessedCandle = candle.time;
+      const agent = paperStudy.agents[name];
+      agent.lastProcessedCandle = candle.time;
+      const evaluatedSignal = agent.lastEvaluation?.signal || "WAIT";
+      agent.lastEvaluation = { ...agent.lastEvaluation, evaluatedSignal,
+        signal: agent.position ? `HOLD_${agent.position.direction}` : "WAIT",
+        positionState: agent.position?.direction || "FLAT" };
     }
     savePaperStudy();
     for (const name of ["Oliver", "AgentC", "Rider"]) {
@@ -4802,6 +4807,12 @@ app.get(
   "/googl-live",
   (req, res) => {
 
+    res.set("Cache-Control", "no-store");
+    if (req.query.dashboard === "1") {
+      return res.json({ latestTrade: latestGOOGLTrade, developing2MinCandle: developingCandle,
+        streamStatus: alpacaStreamStatus, dashboard: buildDashboardView() });
+    }
+
     res.json({
 
       symbol:
@@ -5313,6 +5324,135 @@ app.get(
 
 
 // ==================================================
+// V3.2.8 display layer. Agent analyzers and paper execution rules are unchanged.
+let cDisplayCache = { key: null, value: null };
+function agentCDisplayContext(candles) {
+  const key = JSON.stringify(candles);
+  if (key === cDisplayCache.key) return cDisplayCache.value;
+  const ha = buildHeikinAshi(candles);
+  const analysis = analyzeAgentCPaper(candles);
+  const day = candles.length ? newYorkDateKey(candles.at(-1).time) : null;
+  let direction = "WAIT", previousDirection = "WAIT", confirmedAt = null;
+  // Replay the unchanged analyzer, not an approximation of its conviction rules.
+  // Only current regular-session confirmations establish the control outline.
+  for (let i = 3; i < candles.length; i++) {
+    if (newYorkDateKey(candles[i].time) !== day || !regularSessionForCandle(candles[i])) continue;
+    const signal = analyzeAgentCPaper(candles.slice(0, i + 1)).signal;
+    if ((signal === "CALL" || signal === "PUT") && signal !== direction) {
+      previousDirection = direction;
+      direction = signal;
+      confirmedAt = candles[i].time;
+    }
+  }
+  const strength = candleStrength(ha, direction, previousDirection, confirmedAt);
+  const value = { direction, previousDirection, confirmedAt, analysis, strength };
+  cDisplayCache = { key, value };
+  return value;
+}
+
+function candleStrength(ha, direction, previousDirection, confirmedAt) {
+  const last = ha.at(-1), previous = ha.at(-2);
+  const bodies = ha.slice(-9, -1).map(c => c.body).filter(Number.isFinite).sort((a,b) => a-b);
+  const median = bodies.length ? (bodies[Math.floor((bodies.length - 1)/2)] + bodies[Math.floor(bodies.length/2)])/2 : 0;
+  // Experimental display scale only: 3 = roughly typical; 5 = >=1.75x reference.
+  // A one-cent floor and a doji override prevent tiny bodies scoring as strong.
+  const ratio = last ? last.body / Math.max(0.01, median) : 0;
+  const score = !last || last.isDoji || last.body <= 0.01 || bodies.length < 3 ? 1 :
+    ratio >= 1.75 ? 5 : ratio >= 1.25 ? 4 : ratio >= 0.75 ? 3 : ratio >= 0.30 ? 2 : 1;
+  const bull = last?.color === "GREEN" ? score : 1;
+  const bear = last?.color === "RED" ? score : 1;
+  const opposition = direction === "CALL" ? last?.color === "RED" : direction === "PUT" ? last?.color === "GREEN" : false;
+  const shrinking = !!last && !!previous && last.body < previous.body * 0.75;
+  let status = "Waiting for completed candles";
+  if (last) {
+    if (last.isDoji || score === 1) status = "Small candle — little conviction";
+    else if (opposition) status = (last.color === "GREEN" ? "Buyers" : "Sellers") + " pushing back — reversal not confirmed";
+    else if (confirmedAt === last.time && previousDirection !== "WAIT") status = direction === "CALL" ? "Buyers take control" : "Sellers take control";
+    else if (direction !== "WAIT" && shrinking) status = direction === "CALL" ? "Buying pressure easing" : "Selling pressure easing";
+    else if (direction !== "WAIT") status = direction === "CALL" ? "Buyers in control" : "Sellers in control";
+    else status = last.color === "GREEN" ? "Buyers pushing — waiting for confirmation" : "Sellers pushing — waiting for confirmation";
+  }
+  return { bull, bear, status, opposition, shrinking, color: last?.color || "DOJI", doji: !!last?.isDoji,
+    time: last?.time || null, referenceBodies: bodies.length };
+}
+
+let lastKnownChopState = "WAIT";
+function displayChopRisk(candles) {
+  const result = analyzeChopRisk(candles);
+  if (["CLEAR", "CAUTION", "CHOP"].includes(result.state)) lastKnownChopState = result.state;
+  // Missing candles cannot silently clear a previously visible chop warning.
+  return { ...result, state: result.state === "WAIT" ? lastKnownChopState : result.state,
+    pending: result.state === "WAIT" };
+}
+
+function buildDashboardView(now = Date.now()) {
+  const session = getMarketSession(new Date(now));
+  const c = agentCDisplayContext(completedCandles);
+  const battle = analyzeTrendBattle(completedCandles);
+  const daily = analyzeDailyBias(dailyCandles);
+  const chop = displayChopRisk(completedCandles);
+  const candleTime = completedCandles.at(-1)?.time || null;
+  const candleAge = now - Date.parse(candleTime);
+  const priceAge = now - Date.parse(latestGOOGLTrade?.time);
+  const fresh = alpacaStreamStatus === "connected" && Number(latestGOOGLTrade?.price) > 0 &&
+    Number.isFinite(priceAge) && priceAge >= -10000 && priceAge < 30000 &&
+    Number.isFinite(candleAge) && candleAge >= 120000 && candleAge < 360000;
+  // A missing/invalid candle window cannot clear a warning or enable a pulse.
+  const chopActive = chop.state === "CHOP" || chop.state === "CAUTION";
+  const warningPending = chop.pending || chop.state === "WAIT";
+  const legacyWarning = battle.changeWatch === "WARNING" || trendHold.stage === "REGIME_BROKEN";
+  const legacyCaution = battle.changeWatch === "WATCH" || trendHold.stage === "WARNING";
+  const weak = c.strength.opposition || c.strength.doji || c.strength.shrinking || legacyWarning || legacyCaution;
+  const extended = battle.phase === "EXTENDED";
+  const pulseDirection = session.regularHours && fresh && !chopActive && !warningPending && !weak && !extended
+    ? c.analysis.signal : "WAIT";
+  const direction = c.direction;
+  const side = direction === "CALL" ? "Buyers" : direction === "PUT" ? "Sellers" : "Neither side";
+  let action = { title:"WAIT — No clear entry", detail:"Waiting for stronger directional candles." };
+  if (!session.regularHours) action = { title:"MARKET CLOSED", detail:"Last completed-candle readings are for reference." };
+  else if (!fresh) action = { title:"WAIT — Data not current", detail:"Entry cues are paused until fresh prices and candles return." };
+  else if (chopActive) action = { title:"WAIT — Choppy conditions", detail:"Avoid new entries until price movement becomes clearer." };
+  else if (warningPending) action = { title:"WAIT — Checking conditions", detail:"Building an uninterrupted set of recent candles." };
+  else if (legacyWarning) action = { title:"WAIT — Direction may change", detail:"The move is under pressure. Wait for a clearer new entry." };
+  else if (weak) action = { title:"WAIT — Pressure is changing", detail:"The move is weakening or facing opposition. Wait for clearer conditions." };
+  else if (extended) action = { title:"WAIT — Move is stretched", detail:"A fresh entry may be poorly timed. Wait for a better opportunity." };
+  else if (pulseDirection !== "WAIT") action = { title:`POTENTIAL ${pulseDirection} ENTRY`, detail:"Directional candles support this side. A favorable cue is not a guarantee." };
+  const supportWarning = legacyWarning ? "Direction-change warning: the move may be breaking down." :
+    legacyCaution ? "Weakening warning: the move is losing support." :
+    c.strength.opposition ? "The opposing side is pushing back; a reversal is not yet confirmed." :
+    c.strength.doji ? "The latest candle shows indecision." :
+    c.strength.shrinking ? "The latest candle is smaller; pressure is easing." : "";
+  const warning = [
+    !session.regularHours ? "Market closed — live entry cues are paused." : !fresh ? "Fresh data unavailable — entry cues are paused." : "",
+    chopActive ? "No clear direction — wait for conditions to improve before a new entry." : warningPending ? "Recent candle history is incomplete — wait." : "",
+    supportWarning,
+    extended ? "The move is stretched; be cautious with a new entry." : "",
+    "Check Entry Tracker for your marked trade. Buttons only mark an entry; they do not place orders."
+  ].filter(Boolean).join(" ");
+  const marketRead = {
+    headline: chopActive ? "Price is moving back and forth without clear direction." :
+      direction === "WAIT" ? "Neither side has confirmed control." : `${side} have confirmed control. ${c.strength.status}.`,
+    context: daily.bias === "BULLISH" ? "5-day view: broader conditions favor buyers." :
+      daily.bias === "BEARISH" ? "5-day view: broader conditions favor sellers." : "5-day view: broader conditions are mixed or still developing.",
+    note: action.title + ". " + action.detail
+  };
+  return {
+    version:"3.2.8", regularHours:session.regularHours, session:session.session, fresh,
+    candleTime, quoteTime:latestGOOGLTrade?.time || null, direction, entrySignal:c.analysis.signal,
+    pulseDirection, chopState:chop.state, chopActive, warningPending, strength:c.strength,
+    candleControl: c.strength.doji ? "NEUTRAL" : c.strength.color === "GREEN" ? "BULLS" : c.strength.color === "RED" ? "BEARS" : "NEUTRAL",
+    action, marketRead, warning,
+    hold: { direction:direction === "CALL" ? "BULL" : direction === "PUT" ? "BEAR" : "NONE",
+      stage:direction === "WAIT" ? "WAIT" : weak ? "WARNING" : "HOLD",
+      headline:direction === "WAIT" ? "WAITING FOR DIRECTION" : `${side.toUpperCase()} CONFIRMED${weak ? " · UNDER PRESSURE" : ""}`,
+      reason:chopActive ? "The last confirmed side is highlighted, but current conditions are choppy. Wait before a new entry." :
+        supportWarning || "The confirmed direction remains in place until opposing control is confirmed." },
+    // Preserve pre-existing risk observations separately from C's control state.
+    riskStage:trendHold.stage, changeWatch:battle.changeWatch || "OFF",
+    haRunColor:c.analysis.haRunColor || "NONE", haRunCandles:c.analysis.haRunCandles || 0
+  };
+}
+
 // OLIVER LIVE DASHBOARD
 // ==================================================
 
@@ -5432,87 +5572,21 @@ app.get(
 
 const battle = analyzeTrendBattle(completedCandles);
 const dailyBias = analyzeDailyBias(dailyCandles);
-const aiRead = buildMarketReadV2(battle, dailyBias);
-const hold = trendHold;
-
-const ropePosition = Number(battle.ropePosition || 0);
-// Keep the moving knot in the visible rope segment between the characters' hands.
-// The full strength remains available in the Pressure card and analysis data.
-const ropePercent = Math.max(36, Math.min(64, 50 + ropePosition * 0.28));
-
-const battleControl = battle.control || "NEUTRAL";
+const view = buildDashboardView();
+const aiRead = view.marketRead;
+const hold = view.hold;
+const ropePercent = Math.max(36, Math.min(64, 50 + Number(battle.ropePosition || 0) * 0.28));
+const battleControl = view.candleControl;
 const battlePressure = battle.pressure || "WAITING";
-const dashboardStrength = ({
-  BUYERS_STRONG: "Buyers showing strong candle control",
-  BUYERS: "Buyers holding the latest candle",
-  SELLERS_STRONG: "Sellers showing strong candle control",
-  SELLERS: "Sellers holding the latest candle",
-  INDECISION: "Candles show indecision"
-})[battle.haControl] || "Waiting for candle strength";
-
-const tugIntensity =
-  battlePressure === "DOMINANT" ? "tug-confirmed" :
-  battlePressure === "STRONG" ? "tug-confirmed" :
-  battlePressure === "CONTROL" ? "tug-building" :
-  battlePressure === "EARLY" ? "tug-early" :
-  battlePressure === "BALANCED" ? "tug-waiting" :
-  "tug-waiting";
-
+const dashboardStrength = view.strength.status;
+const tugIntensity = battlePressure === "DOMINANT" || battlePressure === "STRONG" ? "tug-confirmed" :
+  battlePressure === "CONTROL" ? "tug-building" : battlePressure === "EARLY" ? "tug-early" : "tug-waiting";
 const battlePhase = battle.phase || "WAIT";
-const battleAction = battle.action || "WAIT";
-
-const entryCrossed = 
-  battle.entryMarker?.crossed || "NONE";
-
-const marketSession =
-  battle.marketSession?.session || "UNKNOWN";
-
-const regularHours =
-  battle.marketSession?.regularHours ?? false;
-
-const dashboardSignal = getDashboardSignal(battle, regularHours);
-
-// V3.1 — compact 1–5 Bull/Bear strength meter.
-// This is intentionally NOT an entry signal. It blends the last three completed
-// 2-minute candles with the existing multi-factor battle evidence so one candle
-// cannot make the visual flip wildly.
-function buildFiveBoxStrength(candles, battleState) {
-  const recent = Array.isArray(candles) ? candles.slice(-3) : [];
-  let bull = 0;
-  let bear = 0;
-
-  for (const c of recent) {
-    const o = Number(c?.open), h = Number(c?.high), l = Number(c?.low), cl = Number(c?.close);
-    if (![o,h,l,cl].every(Number.isFinite)) continue;
-    const range = Math.max(0.01, h - l);
-    const conviction = Math.min(1, Math.abs(cl - o) / range);
-    if (cl > o) bull += 12 + conviction * 18;
-    else if (cl < o) bear += 12 + conviction * 18;
-    else { bull += 4; bear += 4; }
-  }
-
-  const bullEvidence = Array.isArray(battleState?.bullEvidence) ? battleState.bullEvidence.length : 0;
-  const bearEvidence = Array.isArray(battleState?.bearEvidence) ? battleState.bearEvidence.length : 0;
-  bull += Math.min(30, bullEvidence * 6);
-  bear += Math.min(30, bearEvidence * 6);
-
-  const run = Number(battleState?.haRunCandles || 0);
-  if (battleState?.haRunColor === 'GREEN') bull += Math.min(25, run * 5);
-  if (battleState?.haRunColor === 'RED') bear += Math.min(25, run * 5);
-
-  if (battleState?.control === 'BULLS') bull += 10;
-  if (battleState?.control === 'BEARS') bear += 10;
-
-  const toBoxes = (v) => Math.max(1, Math.min(5, Math.ceil(v / 25)));
-  return { bull: toBoxes(bull), bear: toBoxes(bear) };
-}
-
-const fiveBoxStrength = buildFiveBoxStrength(completedCandles, battle);
-const chopRisk = analyzeChopRisk(completedCandles);
-const chopAge = Date.now() - Date.parse(chopRisk.analyzedCandle);
-const chopFresh = alpacaStreamStatus === "connected" && Number.isFinite(chopAge) && chopAge >= 0 && chopAge < 6 * 60 * 1000;
-const chopVisible = regularHours && chopFresh && (chopRisk.state === "CHOP" || chopRisk.state === "CAUTION");
-
+const battleAction = view.entrySignal === "WAIT" ? "WAIT" : view.entrySignal + "_ENTRY_READY";
+const marketSession = view.session;
+const regularHours = view.regularHours;
+const dashboardSignal = view.action;
+const fiveBoxStrength = view.strength;
 const strengthBoxes = (side, count) =>
   Array.from({ length: 5 }, (_, i) =>
     `<span class="strengthBox ${side} ${i < count ? "on" : ""}"></span>`
@@ -5529,26 +5603,6 @@ const candleClockData = {
   close: Number(developingCandle?.close)
 };
 
-const entryTrackerData = {
-  livePrice: Number(latestGOOGLTrade?.price),
-  liveTime: latestGOOGLTrade?.time || null,
-  candleTime: completedCandles[completedCandles.length - 1]?.time || null,
-  stage: hold.stage,
-  holdDirection: hold.direction,
-  battleControl,
-  battleAction,
-  changeWatch: battle.changeWatch,
-  battlePressure,
-  battlePhase,
-  dailyBias: dailyBias.bias,
-  dailyConfirmed: dailyBias.confirmed,
-  dailyHAColor: dailyBias.haColor || "UNKNOWN",
-  dailyHARun: dailyBias.haRunCandles || 0,
-  invalidation: Number(battle.invalidation),
-  trigger: Number(battle.entryPrice),
-  streamStatus: alpacaStreamStatus,
-  regularHours
-};
 
 const html = `
 <!DOCTYPE html>
@@ -5560,7 +5614,7 @@ const html = `
   content="width=device-width, initial-scale=1.0"
 />
 
-<title>BVB V2 — Trend Battle</title>
+<title>Tug of War — V3.2.8 Test</title>
 
 <style>
 
@@ -6453,7 +6507,7 @@ body { padding: clamp(8px, 1.3vw, 16px); }
 body.trade-active .analysisBox, body.trade-active .entryTracker {
   border-color:#ffdc79 !important; box-shadow:0 0 0 1px rgba(255,220,121,.18),0 8px 22px rgba(0,0,0,.24);
 }
-body.trade-active .actionBox { opacity:.78; }
+body.trade-active .actionBox { opacity:1; }
 body.trade-active .pressureSupport { opacity:.48; }
 body.trade-active .entryGauge { box-shadow:0 0 0 1px rgba(255,220,121,.22); }
 
@@ -6488,6 +6542,13 @@ body.trade-active .centerLine { background:#f6cd72; box-shadow:0 0 8px rgba(246,
 body.trade-active .knot { display:none; }
 body.trade-active .pressureSupport { display:none; }
 
+[hidden] { display:none !important; }
+.strengthSide { padding:4px; border:1px solid transparent; border-radius:6px; }
+.strengthBear.confirmedSide { border-color:#ff6570; background:#ff657012; }
+.strengthBull.confirmedSide { border-color:#62efa5; background:#62efa512; }
+.strengthCaption { white-space:normal; text-align:center; }
+.cockpit .actionBox,.cockpit .aiReadBox,.cockpit .entryTracker { min-width:0; overflow-wrap:anywhere; }
+.dataStatus { grid-column:1 / -1; text-align:center; font-size:10px; color:#aab8ca; padding:3px; }
 .chopWarning { margin-top:6px; padding:6px 8px; border:1px solid #f5bf45; border-radius:8px; background:#382b13; color:#ffe5a1; font-size:12px; line-height:1.35; overflow-wrap:anywhere; }
 .chopBasis { display:block; margin-top:3px; font-size:10px; opacity:.85; }
 </style>
@@ -6527,7 +6588,7 @@ body.trade-active .pressureSupport { display:none; }
 
   <div class="status">
 
-    <div class="control">
+    <div class="control" id="controlHeadline">
       ${
         battleControl === "BULLS"
           ? "BULLS WINNING LATEST CANDLE"
@@ -6537,7 +6598,7 @@ body.trade-active .pressureSupport { display:none; }
       }
     </div>
 
-    <div class="pressure">${dashboardStrength}</div>
+    <div class="pressure" id="pressureSummary">${dashboardStrength}</div>
 
   </div>
 
@@ -6581,31 +6642,30 @@ body.trade-active .pressureSupport { display:none; }
 
   </div>
 
-  <div class="strengthMeter" aria-label="Bull and Bear strength over recent completed 2-minute candles">
-    <div class="strengthSide strengthBear"><span class="strengthName">BEARS</span><div class="strengthBoxes">${strengthBoxes("bear", fiveBoxStrength.bear)}</div><span class="strengthCount">${fiveBoxStrength.bear}/5</span></div>
-    <div class="strengthCaption">2-MIN STRENGTH</div>
-    <div class="strengthSide strengthBull"><span class="strengthCount">${fiveBoxStrength.bull}/5</span><div class="strengthBoxes">${strengthBoxes("bull", fiveBoxStrength.bull)}</div><span class="strengthName">BULLS</span></div>
+  <div class="strengthMeter" aria-label="Latest completed candle strength; outline marks last confirmed direction">
+    <div id="bearStrength" class="strengthSide strengthBear ${view.direction === "PUT" ? "confirmedSide" : ""}"><span class="strengthName">BEARS</span><div class="strengthBoxes">${strengthBoxes("bear", fiveBoxStrength.bear)}</div><span class="strengthCount">${fiveBoxStrength.bear}/5</span></div>
+    <div class="strengthCaption">CANDLE STRENGTH<br><span id="confirmedDirection">${view.direction === "CALL" ? "BUYERS" : view.direction === "PUT" ? "SELLERS" : "NO SIDE"} CONFIRMED</span></div>
+    <div id="bullStrength" class="strengthSide strengthBull ${view.direction === "CALL" ? "confirmedSide" : ""}"><span class="strengthCount">${fiveBoxStrength.bull}/5</span><div class="strengthBoxes">${strengthBoxes("bull", fiveBoxStrength.bull)}</div><span class="strengthName">BULLS</span></div>
   </div>
 
 
   <div class="cockpit">
     <div class="actionBox">
-      <div class="action">${dashboardSignal.title}</div>
-      <div class="phase">${dashboardSignal.detail} · ${battlePhase}</div>
-      ${chopVisible ? `<div class="chopWarning" role="status"><strong>${chopRisk.state === "CHOP" ? "⚠ CHOP WARNING · POOR FOLLOW-THROUGH" : "⚠ CAUTION · POSSIBLE CHOP"}</strong><br>Recent price movement is overlapping with limited progress. New trend entries may be less reliable. This is not an exit signal.<span class="chopBasis">Completed 2-minute candles · experimental warning</span></div>` : ""}
-
+      <div class="action" id="entryAction">${dashboardSignal.title}</div>
+      <div class="phase" id="entryActionDetail">${dashboardSignal.detail}</div>
+      <div class="chopWarning" id="chopWarning" role="status" ${view.chopActive ? "" : "hidden"}>WAIT — No clear direction. Price is moving back and forth. Wait for conditions to improve before a new entry. Existing trade warnings still apply.</div>
     </div>
 
     <div class="aiReadBox holdBox">
-      <div class="aiReadTitle">TREND HOLD MODE</div>
-      <div class="aiReadHeadline">${hold.direction === "BULL" ? "BULLISH" : hold.direction === "BEAR" ? "BEARISH" : "NEUTRAL"} · ${hold.stage === "HOLD" ? "TREND INTACT" : hold.stage === "WARNING" ? "TREND WEAKENING" : hold.stage === "REGIME_BROKEN" ? "TREND BROKEN / REVERSING" : "WAIT"}</div>
-      <div class="aiReadNote">${hold.reason}</div>
+      <div class="aiReadTitle">TREND STATUS</div>
+      <div class="aiReadHeadline" id="trendHeadline">${hold.headline}</div>
+      <div class="aiReadNote" id="trendNote">${hold.reason}</div>
     </div>
 
     <div class="aiReadBox analysisBox">
-      <div class="aiReadTitle">MARKET READ V2</div>
+      <div class="aiReadTitle">MARKET READ</div>
       <div class="aiReadHeadline" id="marketReadHeadline">${aiRead.headline}</div>
-      <div class="aiReadMeta" id="marketReadMeta">${aiRead.alignment === "WITH 5-DAY BIAS" ? "With the 5-day context" : aiRead.alignment === "COUNTER 5-DAY BIAS" ? "Against the 5-day context" : "5-day context still developing"} · 5-day view: ${dailyBias.bias.toLowerCase()}</div>
+      <div class="aiReadMeta" id="marketReadMeta">${aiRead.context}</div>
       <div class="aiReadNote" id="marketReadNote">${aiRead.note}</div>
     </div>
 
@@ -6633,35 +6693,14 @@ body.trade-active .pressureSupport { display:none; }
 
 
     <div class="card candleMiniCard">
-      <div class="label">2-MIN CANDLE</div>
+      <div class="label">2-MIN CANDLE · FORMING</div>
       <div class="value"><span id="candleCountdown">--:--</span> <span id="candleMove">WAITING</span></div>
     </div>
 
   </div>
 
-  <div class="warning">
-
-    ${
-      !regularHours
-
-        ? "🌙 Market closed — analysis is informational until regular trading resumes."
-
-        : battle.changeWatch === "WARNING"
-
-        ? "⚠️ Reversal warning — wait for confirmation."
-
-        : battle.changeWatch === "WATCH"
-
-        ? "⚠️ Trend weakening — watch for a fresh setup."
-
-        : battleAction === "CALL_ENTRY_READY" || battleAction === "PUT_ENTRY_READY"
-
-        ? "Potential trend entry — check the trigger and invalidation before acting."
-
-        : "Monitoring the battle for a change in control."
-    }
-
-  </div>
+  <div class="warning" id="warningSummary">${view.warning}</div>
+  <div class="dataStatus" id="dataStatus">V3.2.8 TEST · Waiting for a fresh price</div>
 
 </div>
 
@@ -6689,306 +6728,189 @@ function refreshMarketClock() {
 }
 refreshMarketClock(); setInterval(refreshMarketClock,1000);
 
-// The tracker is local to this browser; it does not place, close, or detect orders.
+// Browser-only entry marker. No orders and no brokerage access.
 const trackerKey = "bvb-googl-manual-entry-v1";
-const trackerData = ${JSON.stringify(entryTrackerData)};
-const trackerState = document.getElementById("entryTrackerState");
-const trackerDetail = document.getElementById("entryTrackerDetail");
-const callButton = document.getElementById("markCallButton");
-const putButton = document.getElementById("markPutButton");
-const endButton = document.getElementById("endTrackingButton");
-const mainCenterLabel = document.getElementById("mainCenterLabel");
-const battleKnot = document.getElementById("battleKnot");
-const positionCurrent = document.getElementById("positionCurrent");
-const positionBest = document.getElementById("positionBest");
-const positionGiveback = document.getElementById("positionGiveback");
-const positionStats = document.getElementById("positionStats");
-const positionLeftLabel = document.getElementById("positionLeftLabel");
-const positionRightLabel = document.getElementById("positionRightLabel");
-const marketReadHeadline = document.getElementById("marketReadHeadline");
-const marketReadMeta = document.getElementById("marketReadMeta");
-const marketReadNote = document.getElementById("marketReadNote");
+let view = ${JSON.stringify(view)};
+let quote = ${JSON.stringify(latestGOOGLTrade || null)};
+let streamStatus = ${JSON.stringify(alpacaStreamStatus)};
+let requestHealthy = true, requestInFlight = false;
 let trackedEntry = null;
 try {
   const saved = JSON.parse(localStorage.getItem(trackerKey) || "null");
-  if (saved && (saved.direction === "CALL" || saved.direction === "PUT") &&
-      Number.isFinite(Number(saved.price)) && Number(saved.price) > 0 &&
-      Number.isFinite(Date.parse(saved.time))) trackedEntry = saved;
-} catch (_) { /* Browser storage may be disabled. */ }
-
-const liveAge = Date.now() - Date.parse(trackerData.liveTime);
-const freshTrade = trackerData.streamStatus === "connected" &&
-  Number.isFinite(trackerData.livePrice) && trackerData.livePrice > 0 &&
-  Number.isFinite(liveAge) && liveAge >= -10000 && liveAge < 30000;
-const freshCandle = Number.isFinite(Date.parse(trackerData.candleTime)) &&
-  Date.now() - Date.parse(trackerData.candleTime) < 6 * 60 * 1000;
-const canMark = trackerData.regularHours && freshTrade && freshCandle;
+  if (saved && ["CALL","PUT"].includes(saved.direction) && Number(saved.price) > 0 &&
+      Number.isFinite(Number(saved.price)) && Number.isFinite(Date.parse(saved.time))) {
+    trackedEntry = { ...saved, bestObservedMove: Number.isFinite(Number(saved.bestObservedMove)) ? Math.max(0, Number(saved.bestObservedMove)) : 0 };
+  }
+} catch (_) {}
+const el = id => document.getElementById(id);
+const callButton = el("markCallButton"), putButton = el("markPutButton"), endButton = el("endTrackingButton");
+const cents = value => Math.round(Number(value)*100);
 const dollars = value => "$" + Number(value).toFixed(2);
-const cents = value => Math.round(Number(value) * 100);
-function moveText(value) { return (value >= 0 ? "+" : "−") + dollars(Math.abs(value)); }
-
-if (trackedEntry) {
-  const sameDirection = trackerData.holdDirection ===
-    (trackedEntry.direction === "CALL" ? "BULL" : "BEAR");
-  const oppositeAction = trackerData.battleAction ===
-    (trackedEntry.direction === "CALL" ? "PUT_ENTRY_READY" : "CALL_ENTRY_READY");
-  // Use displayed stock cents for every move so best - current = given back.
-  // Existing browser markers with fractional prices are rounded on read.
-  const entryCents = cents(trackedEntry.price);
-  const currentCents = freshTrade ? cents(trackerData.livePrice) : null;
-  const rawMoveCents = currentCents === null ? null : currentCents - entryCents;
-  const signedCents = rawMoveCents === null ? null :
-    rawMoveCents * (trackedEntry.direction === "CALL" ? 1 : -1);
-  const previousBestCents = Math.max(0, cents(trackedEntry.bestObservedMove || 0));
-  const bestCents = signedCents === null ? previousBestCents : Math.max(previousBestCents, signedCents);
-  const signedMove = signedCents === null ? null : signedCents / 100;
-  const bestObservedMove = bestCents / 100;
-  const giveback = signedCents === null || bestCents <= 0 ? null :
-    Math.max(0, bestCents - signedCents) / 100;
-  if (freshTrade && bestCents > previousBestCents) {
-    trackedEntry.bestObservedMove = bestObservedMove;
+const moveText = value => (value < 0 ? "−" : "+") + dollars(Math.abs(value));
+const timeText = time => Number.isFinite(Date.parse(time)) ? new Intl.DateTimeFormat("en-US", {
+  timeZone:"America/Chicago", hour:"numeric", minute:"2-digit", second:"2-digit"
+}).format(new Date(time)) + " CT" : "not available";
+function freshNow() {
+  const age = Date.now() - Date.parse(quote?.time);
+  const candleAge = Date.now() - Date.parse(view.candleTime);
+  return requestHealthy && streamStatus === "connected" && Number(quote?.price) > 0 &&
+    Number.isFinite(age) && age >= -10000 && age < 30000 &&
+    Number.isFinite(candleAge) && candleAge >= 120000 && candleAge < 360000;
+}
+function canMarkNow() { return view.regularHours && freshNow(); }
+function setText(id, text) { el(id).textContent = text; }
+function renderMarket() {
+  const fresh = freshNow();
+  if (Number(quote?.price) > 0) setText("liveHeaderPrice", "GOOGL " + dollars(quote.price));
+  setText("dataStatus", "V3.2.8 TEST · " + (fresh ? "Price updated " : "LAST KNOWN PRICE · ") + timeText(quote?.time) +
+    " · Confirmed candle ended " + timeText(Number.isFinite(Date.parse(view.candleTime)) ? new Date(Date.parse(view.candleTime) + 120000).toISOString() : null));
+  setText("controlHeadline", view.candleControl === "BULLS" ? "BUYERS LEAD THE LAST COMPLETED CANDLE" :
+    view.candleControl === "BEARS" ? "SELLERS LEAD THE LAST COMPLETED CANDLE" : "LAST COMPLETED CANDLE SHOWS INDECISION");
+  setText("pressureSummary", view.strength.status);
+  for (const side of ["bear","bull"]) {
+    const box = el(side + "Strength"), count = view.strength[side];
+    box.classList.toggle("confirmedSide", view.direction === (side === "bull" ? "CALL" : "PUT"));
+    box.querySelectorAll(".strengthBox").forEach((b,i) => b.classList.toggle("on", i<count));
+    box.querySelector(".strengthCount").textContent = count + "/5";
+    box.setAttribute("aria-label", (side === "bull" ? "Buyers" : "Sellers") + " candle strength " + count + " of 5" +
+      (view.direction === (side === "bull" ? "CALL" : "PUT") ? "; last confirmed direction" : ""));
+  }
+  setText("confirmedDirection", view.direction === "CALL" ? "BUYERS CONFIRMED" : view.direction === "PUT" ? "SELLERS CONFIRMED" : "DIRECTION UNCONFIRMED");
+  setText("entryAction", view.regularHours && !fresh ? "WAIT — Data not current" : view.action.title);
+  setText("entryActionDetail", view.regularHours && !fresh ? "Entry cues are paused until fresh prices and candles return." : view.action.detail);
+  el("chopWarning").hidden = !view.chopActive;
+  setText("trendHeadline", view.hold.headline);
+  setText("trendNote", view.hold.reason);
+  // Market Read has no dependency on trackedEntry, entry price or giveback.
+  setText("marketReadHeadline", view.marketRead.headline);
+  setText("marketReadMeta", view.marketRead.context);
+  setText("marketReadNote", view.regularHours && !fresh ? "WAIT — Fresh data unavailable. No new entry cue." : view.marketRead.note);
+  setText("warningSummary", (view.regularHours && !fresh ? "Fresh data unavailable — entry cues are paused. " : "") + view.warning);
+  for (const side of ["bear","bull"]) {
+    const count = view.haRunColor === (side === "bull" ? "GREEN" : "RED") ? view.haRunCandles : 0;
+    document.querySelector("." + side + "Score .scoreNumber").textContent = String(count).padStart(2,"0");
+  }
+  const eligible = !trackedEntry && canMarkNow() && !view.chopActive && !view.warningPending;
+  for (const [button, side] of [[callButton,"CALL"],[putButton,"PUT"]]) {
+    const pulse = eligible && view.pulseDirection === side;
+    button.classList.toggle("setupCue", pulse);
+    button.setAttribute("aria-label", side + (pulse ? " — favorable entry conditions" : " — mark your entry"));
+    button.disabled = !canMarkNow();
+  }
+}
+function positionRead(move, best, giveback) {
+  if (!view.regularHours || !freshNow()) return "WAIT — Fresh trading data unavailable";
+  const same = view.direction === trackedEntry.direction;
+  const oppositeConfirmed = view.direction !== "WAIT" && !same;
+  const oppositeCandle = view.candleControl === (trackedEntry.direction === "CALL" ? "BEARS" : "BULLS");
+  const evidence = [oppositeCandle, view.riskStage === "WARNING" || view.riskStage === "REGIME_BROKEN",
+    oppositeConfirmed, view.changeWatch === "WARNING", oppositeConfirmed && view.entrySignal === view.direction].filter(Boolean).length;
+  const ratio = best > 0 ? giveback/best : 0;
+  if (oppositeConfirmed || view.riskStage === "REGIME_BROKEN" || (best >= 0.10 && ratio >= 0.90 && evidence >= 2))
+    return "EXIT WARNING — Review your trade";
+  if (best >= 0.10 && ratio >= 0.75 && evidence >= 2) return "REVERSAL RISK — Protect your gains";
+  if (best >= 0.10 && ratio >= 0.55 && evidence >= 1) return "GAINS PULLING BACK — Watch closely";
+  if (evidence >= 2 || (best >= 0.10 && ratio >= 0.35) || view.hold.stage === "WARNING")
+    return (move < 0 ? "PRICE AGAINST YOUR ENTRY" : move === 0 ? "AT YOUR ENTRY" : "MOVE FAVORS YOUR TRADE") + " — Trend weakening";
+  if (move < 0) return "PRICE AGAINST YOUR ENTRY" + (same ? " — Confirmed direction still supports your trade" : " — Watch closely");
+  if (same) return giveback > 0 ? "MOVE FAVORS YOUR TRADE — Gains pulling back" : move === 0 ? "AT YOUR ENTRY — Direction supports your trade" : "MOVE FAVORS YOUR TRADE — Direction supports your trade";
+  return "TRACKING — Waiting for clear direction";
+}
+function renderTracker() {
+  const active = !!trackedEntry;
+  document.body.classList.toggle("trade-active", active);
+  document.body.classList.toggle("setup-mode", !active);
+  el("entryControls").classList.toggle("trackingActive", active);
+  callButton.hidden = active; putButton.hidden = active; endButton.hidden = !active;
+  el("activeEntryLabel").hidden = !active;
+  for (const id of ["positionCurrent","positionBest","positionGiveback","positionStats","positionLeftLabel","positionRightLabel"]) el(id).hidden = true;
+  if (!active) {
+    setText("entryTrackerState", canMarkNow() ? "Ready to mark your CALL or PUT" : "WAIT — Fresh trading data unavailable");
+    setText("entryTrackerDetail", "After placing your trade, press its button to track GOOGL from that point. A steady button remains available during chop.");
+    setText("mainCenterLabel", "NEUTRAL");
+    return;
+  }
+  const entry = cents(trackedEntry.price);
+  const fresh = view.regularHours && freshNow();
+  const rawMove = fresh ? (cents(quote.price) - entry)/100 : null;
+  const move = rawMove === null ? null : rawMove * (trackedEntry.direction === "CALL" ? 1 : -1);
+  const priorBest = Math.max(0, cents(trackedEntry.bestObservedMove || 0))/100;
+  const best = move === null ? priorBest : Math.max(priorBest, move);
+  const giveback = move === null || best <= 0 ? 0 : Math.max(0, cents(best) - cents(move))/100;
+  if (fresh && best > priorBest) {
+    trackedEntry.bestObservedMove = best;
     try { localStorage.setItem(trackerKey, JSON.stringify(trackedEntry)); } catch (_) {}
   }
-  const favorableSide = trackedEntry.direction === "CALL" ? "BULLS" : "BEARS";
-  const opposingSide = trackedEntry.direction === "CALL" ? "BEARS" : "BULLS";
-  const favorableControl = trackerData.battleControl === favorableSide;
-  const opposingControl = trackerData.battleControl === opposingSide;
-  const givebackRatio = bestObservedMove > 0 && giveback !== null ? giveback / bestObservedMove : 0;
-  const opposingEvidence = [
-    opposingControl,
-    trackerData.stage === "WARNING" || trackerData.stage === "REGIME_BROKEN",
-    trackerData.holdDirection !== "NONE" && !sameDirection,
-    trackerData.changeWatch === "WARNING",
-    oppositeAction
-  ].filter(Boolean).length;
-
-  let verdict = "WAIT FOR FRESH DATA";
-  if (trackerData.regularHours && freshTrade && freshCandle) {
-    if (trackerData.stage === "REGIME_BROKEN" || oppositeAction ||
-        (givebackRatio >= 0.90 && bestObservedMove >= 0.10 && opposingEvidence >= 2))
-      verdict = "EXIT WARNING · REVIEW POSITION";
-    else if (givebackRatio >= 0.75 && bestObservedMove >= 0.10 && opposingEvidence >= 2)
-      verdict = "REVERSAL RISK · PROTECT POSITION";
-    else if (givebackRatio >= 0.55 && bestObservedMove >= 0.10 && opposingEvidence >= 1)
-      verdict = "PROTECT MOVE · DETERIORATION";
-    else if ((givebackRatio >= 0.35 && bestObservedMove >= 0.10) || opposingEvidence >= 2)
-      verdict = "WATCH · PULLBACK / WEAKENING";
-    else if (sameDirection && trackerData.stage === "HOLD" && signedMove >= 0)
-      verdict = giveback > 0 ? "HOLD · NORMAL PULLBACK" : "HOLD · TREND INTACT";
-    else if (signedMove < 0)
-      verdict = "WATCH · PRICE AGAINST ENTRY";
-    else
-      verdict = "TRACKING · POSITION FAVORABLE";
-  }
-
-  document.body.classList.add("trade-active");
-  const weekAligned = trackerData.dailyBias === (trackedEntry.direction === "CALL" ? "BULLISH" : "BEARISH");
-  let health = trackedEntry.direction + " · " + verdict;
-  let healthNote = "Entry-relative read combines giveback with independent two-minute trend evidence; giveback alone does not force an exit warning.";
-  if (verdict.startsWith("EXIT WARNING"))
-    healthNote = "Severe giveback plus confirming deterioration, a broken two-minute trend, or an opposite setup is present. Review the position.";
-  else if (verdict.startsWith("REVERSAL RISK"))
-    healthNote = "A large portion of the best move has been surrendered while opposing trend evidence is building.";
-  else if (verdict.startsWith("PROTECT MOVE"))
-    healthNote = "The trade remains measurable from entry, but giveback plus opposing evidence now deserves protection attention.";
-  else if (verdict.startsWith("WATCH"))
-    healthNote = "The move is pulling back or weakening. Watch for renewed alignment versus further deterioration.";
-
-  marketReadHeadline.textContent = health;
-  marketReadMeta.textContent = (weekAligned ? "With 5-day context" : "Against/mixed 5-day context") +
-    " · " + trackerData.battleControl + " latest-candle control" +
-    (bestObservedMove > 0 ? " · Best +" + dollars(bestObservedMove) + " · Giveback " + dollars(giveback || 0) +
-      " (" + Math.round(givebackRatio * 100) + "%)" : "");
-  marketReadNote.textContent = healthNote;
-
-  trackerState.textContent = trackedEntry.direction + " · " + verdict;
-  trackerDetail.textContent = "Entry " + dollars(entryCents / 100) +
-    (signedMove === null ? " · Live price unavailable" :
-      " · Move " + moveText(signedMove) +
-      (bestObservedMove > 0 ? " · Best +" + dollars(bestObservedMove) + " · Giveback " + dollars(giveback) +
-        " (" + Math.round(givebackRatio * 100) + "%)" : ""));
-  callButton.hidden = true; putButton.hidden = true; endButton.hidden = false;
-  document.getElementById("entryControls").className += " trackingActive";
-  const activeEntryLabel = document.getElementById("activeEntryLabel");
-  activeEntryLabel.textContent = trackedEntry.direction + " ENTRY ACTIVE";
-  activeEntryLabel.hidden = false;
-  mainCenterLabel.textContent = "ENTRY\\n" + dollars(entryCents / 100);
-  positionLeftLabel.textContent = trackedEntry.direction === "PUT" ? "FAVORABLE" : "ADVERSE";
-  positionRightLabel.textContent = trackedEntry.direction === "CALL" ? "FAVORABLE" : "ADVERSE";
-  positionLeftLabel.hidden = false; positionRightLabel.hidden = false;
-  if (freshTrade) {
-    const rawMove = rawMoveCents / 100;
-    // Main rope scale is +/- $2 of GOOGL movement; exact values remain in text.
-    const displayPercent = Math.max(31, Math.min(69, 50 + rawMove * 9.5));
-    positionCurrent.style.left = displayPercent + "%";
-    positionCurrent.hidden = false;
-    if (bestObservedMove > 0) {
-      const bestRawMove = bestObservedMove * (trackedEntry.direction === "CALL" ? 1 : -1);
-      const bestPercent = Math.max(31, Math.min(69, 50 + bestRawMove * 9.5));
-      positionBest.style.left = bestPercent + "%";
-      positionBest.hidden = false;
-      if (giveback > 0) {
-        positionGiveback.style.left = Math.min(bestPercent, displayPercent) + "%";
-        positionGiveback.style.width = Math.abs(bestPercent - displayPercent) + "%";
-        positionGiveback.hidden = false;
-      }
-    }
-    positionStats.innerHTML =
-      '<div class="positionMetric"><span class="positionMetricLabel">MOVE</span><span class="positionMetricValue" id="positionMoveValue">' + moveText(signedMove) + '</span></div>' +
-      '<div class="positionMetric"><span class="positionMetricLabel">BEST</span><span class="positionMetricValue" id="positionBestValue">+' + dollars(bestObservedMove) + '</span></div>' +
-      '<div class="positionMetric giveback"><span class="positionMetricLabel">GIVEBACK</span><span class="positionMetricValue" id="positionGivebackValue">' + dollars(giveback || 0) + (bestObservedMove > 0 ? ' (' + Math.round(givebackRatio*100) + '%)' : '') + '</span></div>';
-    positionStats.hidden = false;
-  } else {
-    positionStats.textContent = "Waiting for a fresh GOOGL price; saved entry and best move are preserved.";
-    positionStats.hidden = false;
-  }
-  endButton.addEventListener("click", () => {
-    if (confirm("End tracking this entry? This does not close your trade.")) {
-      localStorage.removeItem(trackerKey);
-      window.location.reload();
-    }
-  });
-} else {
-  document.body.classList.add("setup-mode");
-  marketReadNote.textContent = "PRE-ENTRY: wait for a qualifying setup and trigger. The rope shows the immediate Bulls/Bears candle battle; Trend Hold independently tracks the two-minute trend.";
-  trackerState.textContent = canMark ?
-    "Ready to mark CALL or PUT at " + dollars(trackerData.livePrice) :
-    "WAIT · Fresh market price unavailable";
-  trackerDetail.textContent = "After placing your trade, press its button to track GOOGL from that point.";
-  callButton.disabled = !canMark;
-  putButton.disabled = !canMark;
-  // Presentation-only cue driven by the engine's existing entry-ready state.
-  callButton.classList.remove("setupCue");
-  putButton.classList.remove("setupCue");
-  callButton.removeAttribute("aria-label");
-  putButton.removeAttribute("aria-label");
-  if (canMark && trackerData.battleAction === "CALL_ENTRY_READY") {
-    callButton.classList.add("setupCue");
-    callButton.setAttribute("aria-label", "CALL — favorable setup detected");
-  } else if (canMark && trackerData.battleAction === "PUT_ENTRY_READY") {
-    putButton.classList.add("setupCue");
-    putButton.setAttribute("aria-label", "PUT — favorable setup detected");
-  }
-  function markEntry(direction) {
-    if (!canMark) return;
-    if (Date.now() - Date.parse(trackerData.liveTime) >= 30000) {
-      trackerState.textContent = "WAIT · Price is stale. Refresh for a new quote.";
-      callButton.disabled = true; putButton.disabled = true;
-      return;
-    }
-    const entry = { symbol: "GOOGL", direction: direction,
-      price: cents(trackerData.livePrice) / 100, time: new Date().toISOString(),
-      sourceTime: trackerData.liveTime, bestObservedMove: 0 };
-    try {
-      localStorage.setItem(trackerKey, JSON.stringify(entry));
-      window.location.reload();
-    } catch (_) {
-      trackerState.textContent = "Could not save entry in this browser.";
+  setText("entryTrackerState", trackedEntry.direction + " · " + positionRead(move,best,giveback));
+  // Dollar giveback is primary; percentages are suppressed when a small best move distorts them.
+  const percent = best >= 0.50 ? " (" + Math.round(giveback/best*100) + "% of best move)" : "";
+  setText("entryTrackerDetail", "Entry " + dollars(entry/100) + (move === null ? " · Waiting for a fresh price" :
+    " · Move " + moveText(move) + " · Best +" + dollars(best) + " · Given back " + dollars(giveback) + percent) +
+    (view.chopActive ? " · Choppy conditions: wait before a new entry; continue monitoring this trade." : ""));
+  setText("activeEntryLabel", trackedEntry.direction + " ENTRY ACTIVE");
+  setText("mainCenterLabel", "ENTRY " + dollars(entry/100));
+  setText("positionLeftLabel", trackedEntry.direction === "PUT" ? "FAVORABLE" : "ADVERSE");
+  setText("positionRightLabel", trackedEntry.direction === "CALL" ? "FAVORABLE" : "ADVERSE");
+  el("positionLeftLabel").hidden = false; el("positionRightLabel").hidden = false;
+  el("positionStats").hidden = false;
+  if (move === null) { setText("positionStats", "Waiting for a fresh GOOGL price; your entry and best move are saved."); return; }
+  const currentPercent = Math.max(31,Math.min(69,50+rawMove*9.5));
+  el("positionCurrent").style.left = currentPercent + "%"; el("positionCurrent").hidden = false;
+  if (best > 0) {
+    const bestPercent = Math.max(31,Math.min(69,50+best*(trackedEntry.direction === "CALL" ? 1 : -1)*9.5));
+    el("positionBest").style.left = bestPercent+"%"; el("positionBest").hidden = false;
+    if (giveback > 0) {
+      el("positionGiveback").style.left = Math.min(currentPercent,bestPercent)+"%";
+      el("positionGiveback").style.width = Math.abs(currentPercent-bestPercent)+"%";
+      el("positionGiveback").hidden = false;
     }
   }
-  callButton.addEventListener("click", () => markEntry("CALL"));
-  putButton.addEventListener("click", () => markEntry("PUT"));
+  el("positionStats").innerHTML =
+    '<div class="positionMetric"><span class="positionMetricLabel">MOVE</span><span class="positionMetricValue">'+moveText(move)+'</span></div>' +
+    '<div class="positionMetric"><span class="positionMetricLabel">BEST</span><span class="positionMetricValue">+'+dollars(best)+'</span></div>' +
+    '<div class="positionMetric giveback"><span class="positionMetricLabel">GIVEN BACK</span><span class="positionMetricValue">'+dollars(giveback)+'</span></div>';
 }
-// V3.2.2: one primary live GOOGL price, synchronized from the same trade feed.
-// Strategy decisions still use their existing completed-candle logic.
-const liveHeaderPrice = document.getElementById("liveHeaderPrice");
+function renderAll() { renderMarket(); renderTracker(); }
+function markEntry(direction) {
+  if (trackedEntry || !canMarkNow()) return;
+  const next = { symbol:"GOOGL", direction, price:cents(quote.price)/100, time:new Date().toISOString(), sourceTime:quote.time, bestObservedMove:0 };
+  try { localStorage.setItem(trackerKey, JSON.stringify(next)); trackedEntry = next; renderAll(); }
+  catch (_) { setText("entryTrackerState", "Could not save your entry in this browser."); }
+}
+callButton.addEventListener("click", () => markEntry("CALL"));
+putButton.addEventListener("click", () => markEntry("PUT"));
+endButton.addEventListener("click", () => {
+  if (!confirm("End tracking this entry? This does not close your trade.")) return;
+  try { localStorage.removeItem(trackerKey); trackedEntry = null; renderAll(); }
+  catch (_) { setText("entryTrackerState", "Could not clear the saved entry. Please try again."); }
+});
 async function syncLivePriceDisplay() {
+  renderAll(); // Expire stale cues even while a request is pending.
+  if (requestInFlight) return;
+  requestInFlight = true;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 3000);
   try {
-    const response = await fetch("/googl-live", { cache:"no-store" });
-    if (!response.ok) return;
+    const response = await fetch("/googl-live?dashboard=1", { cache:"no-store", signal:controller.signal });
+    if (!response.ok) throw new Error("Live data unavailable");
     const live = await response.json();
-    const price = Number(live?.latestTrade?.price);
-    if (!Number.isFinite(price) || price <= 0) return;
-    liveHeaderPrice.textContent = "GOOGL " + dollars(price);
-
-    if (!trackedEntry) return;
-    const entryCentsLive = cents(trackedEntry.price);
-    const currentCentsLive = cents(price);
-    const rawMoveCentsLive = currentCentsLive - entryCentsLive;
-    const signedCentsLive = rawMoveCentsLive * (trackedEntry.direction === "CALL" ? 1 : -1);
-    const previousBestLive = Math.max(0, cents(trackedEntry.bestObservedMove || 0));
-    const bestCentsLive = Math.max(previousBestLive, signedCentsLive);
-    const signedMoveLive = signedCentsLive / 100;
-    const bestMoveLive = bestCentsLive / 100;
-    const givebackLive = bestCentsLive > 0 ? Math.max(0, bestCentsLive - signedCentsLive) / 100 : 0;
-    const givebackRatioLive = bestMoveLive > 0 ? givebackLive / bestMoveLive : 0;
-    if (bestCentsLive > previousBestLive) {
-      trackedEntry.bestObservedMove = bestMoveLive;
-      try { localStorage.setItem(trackerKey, JSON.stringify(trackedEntry)); } catch (_) {}
+    if (!live.dashboard || !live.latestTrade) throw new Error("Incomplete live data");
+    view = live.dashboard; quote = live.latestTrade; streamStatus = live.streamStatus;
+    requestHealthy = true;
+    if (live.developing2MinCandle) {
+      candleClockData.time = live.developing2MinCandle.time;
+      candleClockData.open = Number(live.developing2MinCandle.open);
+      candleClockData.close = Number(live.developing2MinCandle.close);
+      refreshCandleClock();
     }
-
-    const displayPercentLive = Math.max(31, Math.min(69, 50 + (rawMoveCentsLive / 100) * 9.5));
-    positionCurrent.style.left = displayPercentLive + "%";
-    positionCurrent.hidden = false;
-    if (bestMoveLive > 0) {
-      const bestRawMoveLive = bestMoveLive * (trackedEntry.direction === "CALL" ? 1 : -1);
-      const bestPercentLive = Math.max(31, Math.min(69, 50 + bestRawMoveLive * 9.5));
-      positionBest.style.left = bestPercentLive + "%";
-      positionBest.hidden = false;
-      if (givebackLive > 0) {
-        positionGiveback.style.left = Math.min(bestPercentLive, displayPercentLive) + "%";
-        positionGiveback.style.width = Math.abs(bestPercentLive - displayPercentLive) + "%";
-        positionGiveback.hidden = false;
-      } else {
-        positionGiveback.hidden = true;
-      }
-    }
-    const moveEl = document.getElementById("positionMoveValue");
-    const bestEl = document.getElementById("positionBestValue");
-    const givebackEl = document.getElementById("positionGivebackValue");
-    if (moveEl) moveEl.textContent = moveText(signedMoveLive);
-    if (bestEl) bestEl.textContent = "+" + dollars(bestMoveLive);
-    if (givebackEl) givebackEl.textContent = dollars(givebackLive) + (bestMoveLive > 0 ? " (" + Math.round(givebackRatioLive*100) + "%)" : "");
-
-    // V3.2.3: keep rope, Market Read and Entry Tracker synchronized to the
-    // exact same live cents/best/giveback calculation on every price tick.
-    const sameDirectionLive = trackerData.holdDirection ===
-      (trackedEntry.direction === "CALL" ? "BULL" : "BEAR");
-    const oppositeActionLive = trackerData.battleAction ===
-      (trackedEntry.direction === "CALL" ? "PUT_ENTRY_READY" : "CALL_ENTRY_READY");
-    const opposingSideLive = trackedEntry.direction === "CALL" ? "BEARS" : "BULLS";
-    const opposingControlLive = trackerData.battleControl === opposingSideLive;
-    const opposingEvidenceLive = [
-      opposingControlLive,
-      trackerData.stage === "WARNING" || trackerData.stage === "REGIME_BROKEN",
-      trackerData.holdDirection !== "NONE" && !sameDirectionLive,
-      trackerData.changeWatch === "WARNING",
-      oppositeActionLive
-    ].filter(Boolean).length;
-    let verdictLive = "WAIT FOR FRESH DATA";
-    if (trackerData.regularHours && freshCandle) {
-      if (trackerData.stage === "REGIME_BROKEN" || oppositeActionLive ||
-          (givebackRatioLive >= 0.90 && bestMoveLive >= 0.10 && opposingEvidenceLive >= 2))
-        verdictLive = "EXIT WARNING · REVIEW POSITION";
-      else if (givebackRatioLive >= 0.75 && bestMoveLive >= 0.10 && opposingEvidenceLive >= 2)
-        verdictLive = "REVERSAL RISK · PROTECT POSITION";
-      else if (givebackRatioLive >= 0.55 && bestMoveLive >= 0.10 && opposingEvidenceLive >= 1)
-        verdictLive = "PROTECT MOVE · DETERIORATION";
-      else if ((givebackRatioLive >= 0.35 && bestMoveLive >= 0.10) || opposingEvidenceLive >= 2)
-        verdictLive = "WATCH · PULLBACK / WEAKENING";
-      else if (sameDirectionLive && trackerData.stage === "HOLD" && signedMoveLive >= 0)
-        verdictLive = givebackLive > 0 ? "HOLD · NORMAL PULLBACK" : "HOLD · TREND INTACT";
-      else if (signedMoveLive < 0)
-        verdictLive = "WATCH · PRICE AGAINST ENTRY";
-      else
-        verdictLive = "TRACKING · POSITION FAVORABLE";
-    }
-    const weekAlignedLive = trackerData.dailyBias === (trackedEntry.direction === "CALL" ? "BULLISH" : "BEARISH");
-    marketReadHeadline.textContent = trackedEntry.direction + " · " + verdictLive;
-    marketReadMeta.textContent = (weekAlignedLive ? "With 5-day context" : "Against/mixed 5-day context") +
-      " · " + trackerData.battleControl + " latest-candle control" +
-      (bestMoveLive > 0 ? " · Best +" + dollars(bestMoveLive) + " · Giveback " + dollars(givebackLive) +
-        " (" + Math.round(givebackRatioLive * 100) + "%)" : "");
-    trackerState.textContent = trackedEntry.direction + " · " + verdictLive;
-    trackerDetail.textContent = "Entry " + dollars(entryCentsLive / 100) +
-      " · Move " + moveText(signedMoveLive) +
-      (bestMoveLive > 0 ? " · Best +" + dollars(bestMoveLive) + " · Giveback " + dollars(givebackLive) +
-        " (" + Math.round(givebackRatioLive * 100) + "%)" : "");
-  } catch (_) { /* Keep last known display if the live endpoint is briefly unavailable. */ }
+  } catch (_) { requestHealthy = false; }
+  finally { clearTimeout(timeout); requestInFlight = false; renderAll(); }
 }
+renderAll();
 syncLivePriceDisplay();
 setInterval(syncLivePriceDisplay, 1000);
 setTimeout(() => window.location.reload(), 10000);
+
 </script>
 
 </body>
