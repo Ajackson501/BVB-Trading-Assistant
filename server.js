@@ -5431,13 +5431,20 @@ function buildDashboardView(now = Date.now()) {
   ].filter(Boolean).join(" ");
   const marketRead = {
     headline: chopActive ? "Price is moving back and forth without clear direction." :
-      direction === "WAIT" ? "Neither side has confirmed control." : `${side} have confirmed control. ${c.strength.status}.`,
+      direction === "WAIT" ? "Neither side has confirmed control." : `${side} have confirmed control.${c.strength.opposition || c.strength.doji || c.strength.shrinking ? " " + c.strength.status + "." : ""}`,
     context: daily.bias === "BULLISH" ? "5-day view: broader conditions favor buyers." :
       daily.bias === "BEARISH" ? "5-day view: broader conditions favor sellers." : "5-day view: broader conditions are mixed or still developing.",
     note: action.title + ". " + action.detail
   };
+  const hasQuote = Number.isFinite(Number(latestGOOGLTrade?.price)) && Number(latestGOOGLTrade?.price) > 0 &&
+    Number.isFinite(Date.parse(latestGOOGLTrade?.time));
+  const lastClose = Number(completedCandles.at(-1)?.close);
+  const hasClose = Number.isFinite(lastClose) && lastClose > 0 && Number.isFinite(Date.parse(candleTime));
+  const priceDisplay = hasQuote ? { price:Number(latestGOOGLTrade.price), source:"TRADE", time:latestGOOGLTrade.time } :
+    hasClose ? { price:lastClose, source:"CANDLE", time:new Date(Date.parse(candleTime)+120000).toISOString() } :
+    { price:null, source:"UNAVAILABLE", time:null };
   return {
-    version:"3.2.8", regularHours:session.regularHours, session:session.session, fresh,
+    priceDisplay, version:"3.2.9", regularHours:session.regularHours, session:session.session, fresh,
     candleTime, quoteTime:latestGOOGLTrade?.time || null, direction, entrySignal:c.analysis.signal,
     pulseDirection, chopState:chop.state, chopActive, warningPending, strength:c.strength,
     candleControl: c.strength.doji ? "NEUTRAL" : c.strength.color === "GREEN" ? "BULLS" : c.strength.color === "RED" ? "BEARS" : "NEUTRAL",
@@ -5614,7 +5621,7 @@ const html = `
   content="width=device-width, initial-scale=1.0"
 />
 
-<title>Tug of War — V3.2.8 Test</title>
+<title>Tug of War — V3.2.9 Test</title>
 
 <style>
 
@@ -6548,6 +6555,7 @@ body.trade-active .pressureSupport { display:none; }
 .strengthBull.confirmedSide { border-color:#62efa5; background:#62efa512; }
 .strengthCaption { white-space:normal; text-align:center; }
 .cockpit .actionBox,.cockpit .aiReadBox,.cockpit .entryTracker { min-width:0; overflow-wrap:anywhere; }
+.priceSource { font-size:11px; color:#aab8ca; margin-top:3px; }
 .dataStatus { grid-column:1 / -1; text-align:center; font-size:10px; color:#aab8ca; padding:3px; }
 .chopWarning { margin-top:6px; padding:6px 8px; border:1px solid #f5bf45; border-radius:8px; background:#382b13; color:#ffe5a1; font-size:12px; line-height:1.35; overflow-wrap:anywhere; }
 .chopBasis { display:block; margin-top:3px; font-size:10px; opacity:.85; }
@@ -6566,8 +6574,9 @@ body.trade-active .pressureSupport { display:none; }
       </div>
 
       <div class="price" id="liveHeaderPrice">
-        GOOGL $${Number(latestGOOGLTrade?.price || battle.price || 0).toFixed(2)}
+        GOOGL ${view.priceDisplay.price === null ? "—" : "$" + view.priceDisplay.price.toFixed(2)}
       </div>
+      <div class="priceSource" id="priceSource">${view.priceDisplay.source === "CANDLE" ? "Last completed-candle price" : view.priceDisplay.source === "TRADE" ? "Last received trade price" : "Price unavailable"}</div>
     </div>
 
     <div class="session">
@@ -6700,7 +6709,7 @@ body.trade-active .pressureSupport { display:none; }
   </div>
 
   <div class="warning" id="warningSummary">${view.warning}</div>
-  <div class="dataStatus" id="dataStatus">V3.2.8 TEST · Waiting for a fresh price</div>
+  <div class="dataStatus" id="dataStatus">V3.2.9 TEST · Waiting for a fresh price</div>
 
 </div>
 
@@ -6748,7 +6757,7 @@ const cents = value => Math.round(Number(value)*100);
 const dollars = value => "$" + Number(value).toFixed(2);
 const moveText = value => (value < 0 ? "−" : "+") + dollars(Math.abs(value));
 const timeText = time => Number.isFinite(Date.parse(time)) ? new Intl.DateTimeFormat("en-US", {
-  timeZone:"America/Chicago", hour:"numeric", minute:"2-digit", second:"2-digit"
+  timeZone:"America/Chicago", month:"short", day:"numeric", hour:"numeric", minute:"2-digit", second:"2-digit"
 }).format(new Date(time)) + " CT" : "not available";
 function freshNow() {
   const age = Date.now() - Date.parse(quote?.time);
@@ -6761,9 +6770,14 @@ function canMarkNow() { return view.regularHours && freshNow(); }
 function setText(id, text) { el(id).textContent = text; }
 function renderMarket() {
   const fresh = freshNow();
-  if (Number(quote?.price) > 0) setText("liveHeaderPrice", "GOOGL " + dollars(quote.price));
-  setText("dataStatus", "V3.2.8 TEST · " + (fresh ? "Price updated " : "LAST KNOWN PRICE · ") + timeText(quote?.time) +
-    " · Confirmed candle ended " + timeText(Number.isFinite(Date.parse(view.candleTime)) ? new Date(Date.parse(view.candleTime) + 120000).toISOString() : null));
+  const validQuote = Number.isFinite(Number(quote?.price)) && Number(quote?.price) > 0 && Number.isFinite(Date.parse(quote?.time));
+  const display = validQuote ? { price:Number(quote.price), source:"TRADE", time:quote.time } : view.priceDisplay;
+  const sourceLabel = display.source === "CANDLE" ? "Last completed-candle price" :
+    display.source === "TRADE" ? (fresh && view.regularHours ? "Live trade price" : "Last received trade price") : "Price unavailable";
+  setText("liveHeaderPrice", "GOOGL " + (Number.isFinite(display.price) && display.price > 0 ? dollars(display.price) : "—"));
+  setText("priceSource", sourceLabel);
+  setText("dataStatus", "V3.2.9 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
+    (view.candleTime ? " · Confirmed candle ended " + timeText(new Date(Date.parse(view.candleTime) + 120000).toISOString()) : ""));
   setText("controlHeadline", view.candleControl === "BULLS" ? "BUYERS LEAD THE LAST COMPLETED CANDLE" :
     view.candleControl === "BEARS" ? "SELLERS LEAD THE LAST COMPLETED CANDLE" : "LAST COMPLETED CANDLE SHOWS INDECISION");
   setText("pressureSummary", view.strength.status);
@@ -6799,7 +6813,8 @@ function renderMarket() {
   }
 }
 function positionRead(move, best, giveback) {
-  if (!view.regularHours || !freshNow()) return "WAIT — Fresh trading data unavailable";
+  if (!view.regularHours) return "MARKET CLOSED — Tracking resumes during regular hours";
+  if (!freshNow()) return "WAIT — Fresh trading data unavailable";
   const same = view.direction === trackedEntry.direction;
   const oppositeConfirmed = view.direction !== "WAIT" && !same;
   const oppositeCandle = view.candleControl === (trackedEntry.direction === "CALL" ? "BEARS" : "BULLS");
@@ -6825,8 +6840,8 @@ function renderTracker() {
   el("activeEntryLabel").hidden = !active;
   for (const id of ["positionCurrent","positionBest","positionGiveback","positionStats","positionLeftLabel","positionRightLabel"]) el(id).hidden = true;
   if (!active) {
-    setText("entryTrackerState", canMarkNow() ? "Ready to mark your CALL or PUT" : "WAIT — Fresh trading data unavailable");
-    setText("entryTrackerDetail", "After placing your trade, press its button to track GOOGL from that point. A steady button remains available during chop.");
+    setText("entryTrackerState", !view.regularHours ? "MARKET CLOSED — Tracking resumes during regular hours" : canMarkNow() ? "Ready to mark your CALL or PUT" : "WAIT — Fresh trading data unavailable");
+    setText("entryTrackerDetail", !view.regularHours ? "Entry marking is paused until regular trading resumes." : "After placing your trade, press its button to track GOOGL from that point. A steady button remains available during chop.");
     setText("mainCenterLabel", "NEUTRAL");
     return;
   }
@@ -6844,7 +6859,7 @@ function renderTracker() {
   setText("entryTrackerState", trackedEntry.direction + " · " + positionRead(move,best,giveback));
   // Dollar giveback is primary; percentages are suppressed when a small best move distorts them.
   const percent = best >= 0.50 ? " (" + Math.round(giveback/best*100) + "% of best move)" : "";
-  setText("entryTrackerDetail", "Entry " + dollars(entry/100) + (move === null ? " · Waiting for a fresh price" :
+  setText("entryTrackerDetail", "Entry " + dollars(entry/100) + (move === null ? (!view.regularHours ? " · Your entry and best move are saved" : " · Waiting for a fresh price") :
     " · Move " + moveText(move) + " · Best +" + dollars(best) + " · Given back " + dollars(giveback) + percent) +
     (view.chopActive ? " · Choppy conditions: wait before a new entry; continue monitoring this trade." : ""));
   setText("activeEntryLabel", trackedEntry.direction + " ENTRY ACTIVE");
@@ -6853,7 +6868,7 @@ function renderTracker() {
   setText("positionRightLabel", trackedEntry.direction === "CALL" ? "FAVORABLE" : "ADVERSE");
   el("positionLeftLabel").hidden = false; el("positionRightLabel").hidden = false;
   el("positionStats").hidden = false;
-  if (move === null) { setText("positionStats", "Waiting for a fresh GOOGL price; your entry and best move are saved."); return; }
+  if (move === null) { setText("positionStats", !view.regularHours ? "Market closed — your entry and best move are saved." : "Waiting for a fresh GOOGL price; your entry and best move are saved."); return; }
   const currentPercent = Math.max(31,Math.min(69,50+rawMove*9.5));
   el("positionCurrent").style.left = currentPercent + "%"; el("positionCurrent").hidden = false;
   if (best > 0) {
@@ -6894,7 +6909,7 @@ async function syncLivePriceDisplay() {
     const response = await fetch("/googl-live?dashboard=1", { cache:"no-store", signal:controller.signal });
     if (!response.ok) throw new Error("Live data unavailable");
     const live = await response.json();
-    if (!live.dashboard || !live.latestTrade) throw new Error("Incomplete live data");
+    if (!live.dashboard) throw new Error("Incomplete live data");
     view = live.dashboard; quote = live.latestTrade; streamStatus = live.streamStatus;
     requestHealthy = true;
     if (live.developing2MinCandle) {
