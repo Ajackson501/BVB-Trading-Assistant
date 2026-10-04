@@ -157,7 +157,12 @@ let dailyHistorySeeded = false;
 const PAPER_JOURNAL_FILE =
   process.env.PAPER_JOURNAL_FILE || path.join(__dirname, "bvb-paper-study.json");
 
-const PAPER_STUDY_VERSION = "Oliver-v1.2_vs_AgentC-v1_vs_Rider-v1";
+const PAPER_STUDY_VERSION = "Oliver-v1.2_vs_AgentC-v1_vs_AgentCChopLock-v1_vs_Rider-v1";
+const PAPER_AGENT_NAMES = ["Oliver", "AgentC", "Rider", "AgentCChopLock"];
+// Experimental settings, not optimized or established profitable rules.
+const C_CHOP_TEST = Object.freeze({ version: "C-ChopLock-v1", rangeBars: 8,
+  expansionMultiple: 1.5, minBodyFraction: 0.6, breakoutBufferFraction: 0.1,
+  followThroughBars: 2 });
 
 function newPaperAgentState() {
   return { position: null, trades: [], decisions: [], lastProcessedCandle: null, lastEvaluation: null };
@@ -171,7 +176,8 @@ let paperStudy = {
   agents: {
     Oliver: newPaperAgentState(),
     AgentC: newPaperAgentState(),
-    Rider: newPaperAgentState()
+    Rider: newPaperAgentState(),
+    AgentCChopLock: newPaperAgentState()
   }
 };
 
@@ -184,7 +190,8 @@ function loadPaperStudy() {
       paperStudy.version = PAPER_STUDY_VERSION;
       // Migrate earlier Oliver/Agent C journals without discarding their data.
       if (!paperStudy.agents.Rider) paperStudy.agents.Rider = newPaperAgentState();
-      for (const name of ["Oliver", "AgentC", "Rider"]) {
+      if (!paperStudy.agents.AgentCChopLock) paperStudy.agents.AgentCChopLock = newPaperAgentState();
+      for (const name of PAPER_AGENT_NAMES) {
         const agent = paperStudy.agents[name];
         if (!Array.isArray(agent.trades)) agent.trades = [];
         if (!Array.isArray(agent.decisions)) agent.decisions = [];
@@ -500,15 +507,142 @@ function runAgentCPaperTrader(candles) {
   }
 }
 
+// Separate shadow variant: AgentC remains the original baseline, including its
+// historical journal. Both arms begin comparison flat on the same live candle.
+function prepareCChopExperiment(candle) {
+  const candidate = paperStudy.agents.AgentCChopLock;
+  if (paperStudy.cChopExperiment?.startedAt) return true;
+  if (paperStudy.agents.AgentC.position) {
+    candidate.lastEvaluation = { time: candle.time, signal: "WAIT",
+      reason: "Comparison pending: waiting for original Agent C to be flat before evaluation." };
+    return false;
+  }
+  paperStudy.cChopExperiment = { ...C_CHOP_TEST, startedAt: candle.time,
+    startedAtRecorded: new Date().toISOString(), baseline: "AgentC", variant: "AgentCChopLock",
+    note: "Same completed candles, both flat at start. Paper close-price fills; no options pricing or costs." };
+  recordPaperDecision("AgentCChopLock", { time: candle.time, type: "TEST_STARTED",
+    reason: "Original C and Chop Lock comparison began flat on the same candle." });
+  return true;
+}
+
+function updateCChopGate(candles, analysis, agent) {
+  const candle = candles.at(-1);
+  const date = studyDateKey(candle.time);
+  let lock = agent.chopLock;
+  if (!lock || lock.session !== date) {
+    lock = agent.chopLock = { session: date, locked: false, high: null, low: null,
+      buffer: null, followDirection: null, followCount: 0, lastTime: null };
+  }
+  const detector = analyzeChopRisk(candles);
+  lock.detectorState = detector.state;
+  const valid = ["CLEAR", "CAUTION", "CHOP"].includes(detector.state);
+  const contiguous = lock.lastTime && Date.parse(candle.time) - Date.parse(lock.lastTime) === 120000;
+  if (!contiguous) { lock.followCount = 0; lock.followDirection = null; }
+  lock.lastTime = candle.time;
+  if (!valid) {
+    lock.followCount = 0;
+    lock.followDirection = null;
+    return { allow: false, state: "DATA_WAIT", reason: "Need nine valid contiguous completed candles; lock cannot clear on missing data." };
+  }
+  const chopNow = detector.state === "CAUTION" || detector.state === "CHOP";
+  let justLocked = false;
+  if (chopNow && !lock.locked) {
+    const range = candles.slice(-C_CHOP_TEST.rangeBars);
+    lock.locked = true;
+    lock.high = Math.max(...range.map(b => b.high));
+    lock.low = Math.min(...range.map(b => b.low));
+    lock.buffer = Math.max(0.01, range.reduce((s,b) => s + b.high-b.low, 0) / range.length * C_CHOP_TEST.breakoutBufferFraction);
+    lock.followCount = 0;
+    lock.followDirection = null;
+    justLocked = true;
+    recordPaperDecision("AgentCChopLock", { time: candle.time, type: "CHOP_LOCK",
+      reason: `${detector.state}: new entries and reversals require stronger evidence.`,
+      rangeHigh: lock.high, rangeLow: lock.low, buffer: lock.buffer });
+    console.log(`AgentCChopLock LOCK ${candle.time} — ${detector.state}`);
+  }
+  if (!lock.locked) return { allow: true, state: "CLEAR", reason: "Normal Agent C rules." };
+
+  const signal = analysis.signal;
+  const directional = signal === "CALL" || signal === "PUT";
+  const prior = candles.slice(-9, -1); // Never include the decision candle in its breakout boundary.
+  const meanRange = prior.reduce((s,b) => s + b.high-b.low, 0) / prior.length;
+  const meanBody = prior.reduce((s,b) => s + Math.abs(b.close-b.open), 0) / prior.length;
+  const buffer = Math.max(0.01, meanRange * C_CHOP_TEST.breakoutBufferFraction);
+  const body = Math.abs(candle.close-candle.open), range = candle.high-candle.low;
+  const realDirection = signal === "CALL" ? candle.close > candle.open : candle.close < candle.open;
+  const recentBreak = signal === "CALL"
+    ? candle.close > Math.max(...prior.map(b => b.high)) + buffer
+    : candle.close < Math.min(...prior.map(b => b.low)) - buffer;
+  const strong = directional && realDirection && recentBreak && range > 0 &&
+    body / range >= C_CHOP_TEST.minBodyFraction && body >= C_CHOP_TEST.expansionMultiple * Math.max(0.01, meanBody);
+
+  // Slower release: two consecutive HA-confirmed closes outside the frozen
+  // chop range, with forward price progress and a now-CLEAR detector.
+  const outside = directional && !justLocked && (signal === "CALL"
+    ? candle.close > lock.high + lock.buffer : candle.close < lock.low - lock.buffer);
+  const progress = signal === "CALL" ? candle.close > prior.at(-1).close : candle.close < prior.at(-1).close;
+  if (outside && detector.state === "CLEAR") {
+    lock.followCount = lock.followDirection === signal && contiguous && progress ? lock.followCount + 1 : 1;
+    lock.followDirection = signal;
+  } else { lock.followCount = 0; lock.followDirection = null; }
+  if (strong || lock.followCount >= C_CHOP_TEST.followThroughBars) {
+    const reason = strong ? "Strong real-price range breakout plus normal C conviction." :
+      "Two confirmed advancing closes outside the locked range; chop detector clear.";
+    lock.locked = false;
+    lock.followCount = 0;
+    recordPaperDecision("AgentCChopLock", { time: candle.time, type: "CHOP_UNLOCK", direction: signal, reason });
+    console.log(`AgentCChopLock UNLOCK ${candle.time} — ${reason}`);
+    return { allow: true, state: "UNLOCKED", reason };
+  }
+  return { allow: false, state: "LOCKED", reason: "Chop Lock: wait for a strong breakout or confirmed follow-through." };
+}
+
+function runAgentCChopLockPaperTrader(candles) {
+  const candle = candles.at(-1);
+  if (!candle || !regularSessionForCandle(candle) || !paperStudy.cChopExperiment?.startedAt) return;
+  const agent = paperStudy.agents.AgentCChopLock;
+  const analysis = analyzeAgentCPaper(candles);
+  const wasLocked = !!agent.chopLock?.locked && agent.chopLock.session === studyDateKey(candle.time);
+  const gate = updateCChopGate(candles, analysis, agent);
+  agent.lastEvaluation = { time: candle.time, signal: analysis.signal, reason: gate.reason,
+    rawSignal: analysis.signal, gate: gate.state, detectorState: agent.chopLock.detectorState };
+  let exited = false;
+  if (agent.position) {
+    updatePaperExcursion(agent.position, candle);
+    const opposite = (agent.position.direction === "CALL" && analysis.signal === "PUT") ||
+      (agent.position.direction === "PUT" && analysis.signal === "CALL");
+    if (!opposite) return; // Chop alone never closes an existing position.
+    closePaperPosition("AgentCChopLock", candle, "Opposite Agent C HA conviction confirmed.", { analysis, gate });
+    exited = true;
+  }
+  if (analysis.signal !== "CALL" && analysis.signal !== "PUT") return;
+  // Always take at least one flat step when exiting during a lock/unlock.
+  // A strong breakout on the exit candle does not bypass this restriction.
+  const flatAfterExit = exited && (wasLocked || gate.state !== "CLEAR");
+  if (!gate.allow || flatAfterExit) {
+    const reason = flatAfterExit ? "Exited during Chop Lock; no same-candle reversal. Re-evaluate next completed candle." : gate.reason;
+    agent.lastEvaluation.reason = reason;
+    recordPaperDecision("AgentCChopLock", { time: candle.time, type: "ENTRY_BLOCKED",
+      direction: analysis.signal, price: candle.close, gate: gate.state, reason });
+    console.log(`AgentCChopLock BLOCK ${analysis.signal} ${candle.time} — ${reason}`);
+    return;
+  }
+  openPaperPosition("AgentCChopLock", analysis.signal, candle, analysis.reason, { ...analysis, gate });
+}
+
 function runIndependentPaperStudy(candles) {
   if (!candles.length) return;
   try {
     const candle = candles[candles.length - 1];
     if (!regularSessionForCandle(candle)) return;
-    runOliverPaperTrader(candles);
-    runAgentCPaperTrader(candles);
-    runRiderPaperTrader(candles);
-    for (const name of ["Oliver", "AgentC", "Rider"]) {
+    const runners = { Oliver: runOliverPaperTrader, AgentC: runAgentCPaperTrader,
+      Rider: runRiderPaperTrader, AgentCChopLock: runAgentCChopLockPaperTrader };
+    const pending = PAPER_AGENT_NAMES.filter(name => !paperStudy.agents[name].lastProcessedCandle ||
+      Date.parse(candle.time) > Date.parse(paperStudy.agents[name].lastProcessedCandle));
+    if (!pending.length) return; // No duplicate or out-of-order executions, including after restart.
+    if (pending.includes("AgentC") && pending.includes("AgentCChopLock")) prepareCChopExperiment(candle);
+    for (const name of pending) runners[name](candles);
+    for (const name of pending) {
       const agent = paperStudy.agents[name];
       agent.lastProcessedCandle = candle.time;
       const evaluatedSignal = agent.lastEvaluation?.signal || "WAIT";
@@ -517,7 +651,7 @@ function runIndependentPaperStudy(candles) {
         positionState: agent.position?.direction || "FLAT" };
     }
     savePaperStudy();
-    for (const name of ["Oliver", "AgentC", "Rider"]) {
+    for (const name of pending) {
       const agent = paperStudy.agents[name];
       console.log(`${name} PAPER CHECK ${candle.time} — ${agent.lastEvaluation?.signal || "WAIT"}${agent.position ? `; POSITION ${agent.position.direction} @ ${agent.position.entryPrice}` : "; FLAT"}`);
     }
@@ -536,7 +670,7 @@ function closePaperPositionsAtSessionEnd() {
   }).format(new Date());
   const [h, m] = nowET.split(":").map(Number);
   if ((h * 60 + m) < 960) return;
-  for (const name of ["Oliver", "AgentC", "Rider"]) {
+  for (const name of PAPER_AGENT_NAMES) {
     const pos = paperStudy.agents[name].position;
     if (pos && studyDateKey(pos.entryTime) === studyDateKey(new Date())) {
       closePaperPosition(name, last, "Regular market session ended.");
@@ -545,9 +679,9 @@ function closePaperPositionsAtSessionEnd() {
 }
 
 function paperDailySummary(dateKey = studyDateKey(new Date())) {
-  const summarize = (name) => {
+  const summarize = (name, since = null) => {
     const agent = paperStudy.agents[name];
-    const trades = agent.trades.filter(t => studyDateKey(t.entryTime) === dateKey);
+    const trades = agent.trades.filter(t => studyDateKey(t.entryTime) === dateKey && (!since || t.entryTime >= since));
     const favorable = trades.filter(t => t.result === "FAVORABLE").length;
     const unfavorable = trades.filter(t => t.result === "UNFAVORABLE").length;
     const flat = trades.filter(t => t.result === "FLAT").length;
@@ -567,7 +701,16 @@ function paperDailySummary(dateKey = studyDateKey(new Date())) {
     Oliver: summarize("Oliver"),
     AgentC: summarize("AgentC"),
     Rider: summarize("Rider"),
-    agentHealth: Object.fromEntries(["Oliver", "AgentC", "Rider"].map(name => [name, {
+    AgentCChopLock: summarize("AgentCChopLock"),
+    cChopComparison: {
+      experiment: paperStudy.cChopExperiment || { status: "PENDING_FLAT_START" },
+      baseline: paperStudy.cChopExperiment?.startedAt ? summarize("AgentC", paperStudy.cChopExperiment.startedAt) : null,
+      chopLock: paperStudy.cChopExperiment?.startedAt ? summarize("AgentCChopLock", paperStudy.cChopExperiment.startedAt) : null,
+      events: paperStudy.agents.AgentCChopLock.decisions.filter(d => studyDateKey(d.time) === dateKey &&
+        ["TEST_STARTED", "CHOP_LOCK", "CHOP_UNLOCK", "ENTRY_BLOCKED"].includes(d.type)),
+      note: "Compare only matched post-start sessions; open positions are separate from realized totals. Stock moves only, before costs."
+    },
+    agentHealth: Object.fromEntries(PAPER_AGENT_NAMES.map(name => [name, {
       lastProcessedCandle: paperStudy.agents[name].lastProcessedCandle,
       lastEvaluation: paperStudy.agents[name].lastEvaluation,
       activePosition: paperStudy.agents[name].position
@@ -5444,7 +5587,7 @@ function buildDashboardView(now = Date.now()) {
     hasClose ? { price:lastClose, source:"CANDLE", time:new Date(Date.parse(candleTime)+120000).toISOString() } :
     { price:null, source:"UNAVAILABLE", time:null };
   return {
-    priceDisplay, version:"3.2.9", regularHours:session.regularHours, session:session.session, fresh,
+    priceDisplay, version:"3.2.10", regularHours:session.regularHours, session:session.session, fresh,
     candleTime, quoteTime:latestGOOGLTrade?.time || null, direction, entrySignal:c.analysis.signal,
     pulseDirection, chopState:chop.state, chopActive, warningPending, strength:c.strength,
     candleControl: c.strength.doji ? "NEUTRAL" : c.strength.color === "GREEN" ? "BULLS" : c.strength.color === "RED" ? "BEARS" : "NEUTRAL",
@@ -5621,7 +5764,7 @@ const html = `
   content="width=device-width, initial-scale=1.0"
 />
 
-<title>Tug of War — V3.2.9 Test</title>
+<title>Tug of War — V3.2.10 Test</title>
 
 <style>
 
@@ -6709,7 +6852,7 @@ body.trade-active .pressureSupport { display:none; }
   </div>
 
   <div class="warning" id="warningSummary">${view.warning}</div>
-  <div class="dataStatus" id="dataStatus">V3.2.9 TEST · Waiting for a fresh price</div>
+  <div class="dataStatus" id="dataStatus">V3.2.10 TEST · Waiting for a fresh price</div>
 
 </div>
 
@@ -6776,7 +6919,7 @@ function renderMarket() {
     display.source === "TRADE" ? (fresh && view.regularHours ? "Live trade price" : "Last received trade price") : "Price unavailable";
   setText("liveHeaderPrice", "GOOGL " + (Number.isFinite(display.price) && display.price > 0 ? dollars(display.price) : "—"));
   setText("priceSource", sourceLabel);
-  setText("dataStatus", "V3.2.9 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
+  setText("dataStatus", "V3.2.10 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
     (view.candleTime ? " · Confirmed candle ended " + timeText(new Date(Date.parse(view.candleTime) + 120000).toISOString()) : ""));
   setText("controlHeadline", view.candleControl === "BULLS" ? "BUYERS LEAD THE LAST COMPLETED CANDLE" :
     view.candleControl === "BEARS" ? "SELLERS LEAD THE LAST COMPLETED CANDLE" : "LAST COMPLETED CANDLE SHOWS INDECISION");
@@ -6953,11 +7096,14 @@ app.get("/paper-study", authorizeBVBEvents, (req, res) => {
     symbol: paperStudy.symbol,
     timeframe: paperStudy.timeframe,
     strategyNotes: {
+      AgentC: "Unchanged Agent C v1 baseline; existing history preserved.",
+      AgentCChopLock: "Paper-only C variant: caution/chop blocks new entries and immediate reversals; strong breakout or confirmed follow-through unlocks. Existing C exits preserved.",
       Rider: "Separate experimental paper study: 15-minute bias/context, 5-minute trend/location, and 2-minute pullback confirmation. Higher timeframes are seeded once from Alpaca and then aggregated from the existing live GOOGL trade stream.",
       RiderHistory: { bars5m: riderCandles5m.length, bars15m: riderCandles15m.length, required15mBars: 200 }
     },
     updatedAt: paperStudy.updatedAt,
     persistenceFile: PAPER_JOURNAL_FILE,
+    cChopExperiment: paperStudy.cChopExperiment || { status: "PENDING_FLAT_START" },
     agents: paperStudy.agents
   });
 });
