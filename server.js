@@ -5558,7 +5558,7 @@ function buildDashboardView(now = Date.now()) {
   else if (warningPending) action = { title:"WAIT — Checking conditions", detail:"Building an uninterrupted set of recent candles." };
   else if (legacyWarning) action = { title:"WAIT — Direction may change", detail:"The move is under pressure. Wait for a clearer new entry." };
   else if (weak) action = { title:"WAIT — Pressure is changing", detail:"The move is weakening or facing opposition. Wait for clearer conditions." };
-  else if (extended) action = { title:"WAIT — Move is stretched", detail:"A fresh entry may be poorly timed. Wait for a better opportunity." };
+  else if (extended) action = { title:"WAIT — Entry is extended", detail:"Watch for a fresh setup before a new entry." };
   else if (pulseDirection !== "WAIT") action = { title:`POTENTIAL ${pulseDirection} ENTRY`, detail:"Directional candles support this side. A favorable cue is not a guarantee." };
   const supportWarning = legacyWarning ? "Direction-change warning: the move may be breaking down." :
     legacyCaution ? "Weakening warning: the move is losing support." :
@@ -5587,7 +5587,7 @@ function buildDashboardView(now = Date.now()) {
     hasClose ? { price:lastClose, source:"CANDLE", time:new Date(Date.parse(candleTime)+120000).toISOString() } :
     { price:null, source:"UNAVAILABLE", time:null };
   return {
-    priceDisplay, version:"3.2.10", regularHours:session.regularHours, session:session.session, fresh,
+    priceDisplay, version:"3.2.11", regularHours:session.regularHours, session:session.session, fresh,
     candleTime, quoteTime:latestGOOGLTrade?.time || null, direction, entrySignal:c.analysis.signal,
     pulseDirection, chopState:chop.state, chopActive, warningPending, strength:c.strength,
     candleControl: c.strength.doji ? "NEUTRAL" : c.strength.color === "GREEN" ? "BULLS" : c.strength.color === "RED" ? "BEARS" : "NEUTRAL",
@@ -5764,7 +5764,7 @@ const html = `
   content="width=device-width, initial-scale=1.0"
 />
 
-<title>Tug of War — V3.2.10 Test</title>
+<title>Tug of War — V3.2.11 Test</title>
 
 <style>
 
@@ -6729,7 +6729,7 @@ body.trade-active .pressureSupport { display:none; }
         ${dailyBias.bias} ${dailyBias.arrow || ""}
       </div>
       <div class="dailyConfirm">
-        ${dailyBias.confirmed ? "TREND CONFIRMED" : dailyBias.bias === "BUILDING" ? "BUILDING" : "TREND NOT CONFIRMED"}
+        ${dailyBias.confirmed ? "5-DAY TREND CONFIRMED" : dailyBias.bias === "BUILDING" ? "5-DAY TREND BUILDING" : "5-DAY TREND NOT CONFIRMED"}
       </div>
       <div class="dailyConfirm">${dailyBias.bias === "BULLISH" ? "Broader market conditions favor buyers." : dailyBias.bias === "BEARISH" ? "Broader market conditions favor sellers." : dailyBias.bias === "TRANSITION" ? "Broader market conditions are mixed." : "Broader market conditions are still developing."}</div>
       <div class="marketLine">${marketSession} · ${regularHours ? "LIVE MARKET" : "MARKET CLOSED"} · <span id="marketClock">--:-- CT</span></div>
@@ -6803,6 +6803,7 @@ body.trade-active .pressureSupport { display:none; }
 
   <div class="cockpit">
     <div class="actionBox">
+      <div class="aiReadTitle" id="actionContext">NEW ENTRY</div>
       <div class="action" id="entryAction">${dashboardSignal.title}</div>
       <div class="phase" id="entryActionDetail">${dashboardSignal.detail}</div>
       <div class="chopWarning" id="chopWarning" role="status" ${view.chopActive ? "" : "hidden"}>WAIT — No clear direction. Price is moving back and forth. Wait for conditions to improve before a new entry. Existing trade warnings still apply.</div>
@@ -6852,7 +6853,7 @@ body.trade-active .pressureSupport { display:none; }
   </div>
 
   <div class="warning" id="warningSummary">${view.warning}</div>
-  <div class="dataStatus" id="dataStatus">V3.2.10 TEST · Waiting for a fresh price</div>
+  <div class="dataStatus" id="dataStatus">V3.2.11 TEST · Waiting for a fresh price</div>
 
 </div>
 
@@ -6919,7 +6920,7 @@ function renderMarket() {
     display.source === "TRADE" ? (fresh && view.regularHours ? "Live trade price" : "Last received trade price") : "Price unavailable";
   setText("liveHeaderPrice", "GOOGL " + (Number.isFinite(display.price) && display.price > 0 ? dollars(display.price) : "—"));
   setText("priceSource", sourceLabel);
-  setText("dataStatus", "V3.2.10 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
+  setText("dataStatus", "V3.2.11 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
     (view.candleTime ? " · Confirmed candle ended " + timeText(new Date(Date.parse(view.candleTime) + 120000).toISOString()) : ""));
   setText("controlHeadline", view.candleControl === "BULLS" ? "BUYERS LEAD THE LAST COMPLETED CANDLE" :
     view.candleControl === "BEARS" ? "SELLERS LEAD THE LAST COMPLETED CANDLE" : "LAST COMPLETED CANDLE SHOWS INDECISION");
@@ -6935,6 +6936,7 @@ function renderMarket() {
   setText("confirmedDirection", view.direction === "CALL" ? "BUYERS CONFIRMED" : view.direction === "PUT" ? "SELLERS CONFIRMED" : "DIRECTION UNCONFIRMED");
   setText("entryAction", view.regularHours && !fresh ? "WAIT — Data not current" : view.action.title);
   setText("entryActionDetail", view.regularHours && !fresh ? "Entry cues are paused until fresh prices and candles return." : view.action.detail);
+  setText("actionContext", "NEW ENTRY");
   el("chopWarning").hidden = !view.chopActive;
   setText("trendHeadline", view.hold.headline);
   setText("trendNote", view.hold.reason);
@@ -6955,24 +6957,34 @@ function renderMarket() {
     button.disabled = !canMarkNow();
   }
 }
-function positionRead(move, best, giveback) {
-  if (!view.regularHours) return "MARKET CLOSED — Tracking resumes during regular hours";
-  if (!freshNow()) return "WAIT — Fresh trading data unavailable";
+function positionGuidance(move, best, giveback) {
+  // Presentation only: branch order and risk thresholds match V3.2.10.
+  const message = (level, title, detail) => ({level, title, detail});
+  if (!view.regularHours) return message("CLOSED", "MARKET CLOSED — Trade marked", "Entry and best move are saved. Live guidance resumes during regular hours.");
+  if (!freshNow()) return message("STALE", "CHECK YOUR TRADE — Data not current", "Live guidance is unavailable. Check your broker and exit plan; your marker remains saved.");
   const same = view.direction === trackedEntry.direction;
   const oppositeConfirmed = view.direction !== "WAIT" && !same;
   const oppositeCandle = view.candleControl === (trackedEntry.direction === "CALL" ? "BEARS" : "BULLS");
   const evidence = [oppositeCandle, view.riskStage === "WARNING" || view.riskStage === "REGIME_BROKEN",
     oppositeConfirmed, view.changeWatch === "WARNING", oppositeConfirmed && view.entrySignal === view.direction].filter(Boolean).length;
   const ratio = best > 0 ? giveback/best : 0;
+  const lastDirection = view.direction === "CALL" ? "bullish" : view.direction === "PUT" ? "bearish" : "unconfirmed";
+  const priceFact = best > 0 && move <= 0 ? "All tracked gains given back; price is " + (move < 0 ? "against" : "at") + " your entry. " :
+    move < 0 ? "Price is against your entry. " : giveback > 0 ? "Price is pulling back from your best tracked price. " : "";
+  const context = "Last confirmed direction: " + lastDirection + ".";
   if (oppositeConfirmed || view.riskStage === "REGIME_BROKEN" || (best >= 0.10 && ratio >= 0.90 && evidence >= 2))
-    return "EXIT WARNING — Review your trade";
-  if (best >= 0.10 && ratio >= 0.75 && evidence >= 2) return "REVERSAL RISK — Protect your gains";
-  if (best >= 0.10 && ratio >= 0.55 && evidence >= 1) return "GAINS PULLING BACK — Watch closely";
+    return message("EXIT", "EXIT WARNING — Review your exit plan", priceFact + (oppositeConfirmed ?
+      "CONFIRMED WARNING: Completed candles now confirm direction against your trade." : view.riskStage === "REGIME_BROKEN" ?
+      "CONFIRMED WARNING: The trend-support check has broken down. " + context :
+      "LIVE + CANDLE WARNING: Giveback and completed-candle risk evidence meet the existing exit-warning rule. " + context));
+  if (best >= 0.10 && ratio >= 0.75 && evidence >= 2) return message("REVERSAL", "CAUTION — Reversal risk", priceFact + "LIVE + CANDLE WARNING: Large giveback with opposing risk evidence. Review your exit plan. " + context);
+  if (best >= 0.10 && ratio >= 0.55 && evidence >= 1) return message("PULLBACK", "CAUTION — Gains pulling back", priceFact + "LIVE + CANDLE WARNING: Giveback with candle-based risk evidence. Review your exit plan. " + context);
   if (evidence >= 2 || (best >= 0.10 && ratio >= 0.35) || view.hold.stage === "WARNING")
-    return (move < 0 ? "PRICE AGAINST YOUR ENTRY" : move === 0 ? "AT YOUR ENTRY" : "MOVE FAVORS YOUR TRADE") + " — Trend weakening";
-  if (move < 0) return "PRICE AGAINST YOUR ENTRY" + (same ? " — Confirmed direction still supports your trade" : " — Watch closely");
-  if (same) return giveback > 0 ? "MOVE FAVORS YOUR TRADE — Gains pulling back" : move === 0 ? "AT YOUR ENTRY — Direction supports your trade" : "MOVE FAVORS YOUR TRADE — Direction supports your trade";
-  return "TRACKING — Waiting for clear direction";
+    return message("WEAK", "CAUTION — Review your trade", priceFact + (evidence >= 2 || view.hold.stage === "WARNING" ?
+      "CANDLE WARNING: Support is weakening or facing opposition. " : "LIVE WARNING: The giveback threshold has been reached; this alone does not confirm a reversal. ") + "Review your exit plan. " + context);
+  if (move < 0) return message("AGAINST", "CAUTION — Price against your entry", priceFact + "LIVE WARNING: Review your exit plan. " + context);
+  if (same) return message("HOLD", "HOLD — Confirmed direction supports your trade", priceFact + "COMPLETED-CANDLE BASIS: No existing exit-warning condition is met. Keep your exit plan in place.");
+  return message("TRACKING", "WATCH — Direction not confirmed", priceFact + "Wait for clearer completed-candle evidence; keep your exit plan in place.");
 }
 function renderTracker() {
   const active = !!trackedEntry;
@@ -6999,7 +7011,16 @@ function renderTracker() {
     trackedEntry.bestObservedMove = best;
     try { localStorage.setItem(trackerKey, JSON.stringify(trackedEntry)); } catch (_) {}
   }
-  setText("entryTrackerState", trackedEntry.direction + " · " + positionRead(move,best,giveback));
+  const guidance = positionGuidance(move,best,giveback);
+  // Marked-trade guidance takes priority; new-entry advice stays in Market Read.
+  setText("actionContext", "YOUR MARKED " + trackedEntry.direction + (fresh ? "" : " · GUIDANCE PAUSED"));
+  setText("entryAction", guidance.title);
+  setText("entryActionDetail", guidance.detail);
+  setText("controlHeadline", trackedEntry.direction + " · " + guidance.title);
+  setText("pressureSummary", "Last completed candle: " + (view.candleControl === "BULLS" ? "buyers lead" : view.candleControl === "BEARS" ? "sellers lead" : "indecision") + ". " + view.strength.status + ".");
+  setText("marketReadNote", "NEW ENTRY: " + (view.regularHours && !fresh ? "WAIT — Data not current." : view.action.title + ". " + view.action.detail));
+  setText("warningSummary", guidance.detail + " Marker only; follow your exit plan. End Tracking does not close a brokerage trade.");
+  setText("entryTrackerState", trackedEntry.direction + " · " + guidance.title);
   // Dollar giveback is primary; percentages are suppressed when a small best move distorts them.
   const percent = best >= 0.50 ? " (" + Math.round(giveback/best*100) + "% of best move)" : "";
   setText("entryTrackerDetail", "Entry " + dollars(entry/100) + (move === null ? (!view.regularHours ? " · Your entry and best move are saved" : " · Waiting for a fresh price") :
