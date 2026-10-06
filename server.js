@@ -154,8 +154,13 @@ let dailyHistorySeeded = false;
 // Without a persistent disk, the default local file survives ordinary process
 // restarts only while the instance filesystem remains available.
 
-const PAPER_JOURNAL_FILE =
-  process.env.PAPER_JOURNAL_FILE || path.join(__dirname, "bvb-paper-study.json");
+const PAPER_JOURNAL_FILE = process.env.PAPER_JOURNAL_FILE ||
+  (fs.existsSync("/var/data")
+    ? path.join("/var/data", "bvb-paper-study.json")
+    : path.join(__dirname, "bvb-paper-study.json"));
+const RENDER_PERSISTENT_DATA_DIR = "/var/data";
+const PAPER_PERSISTENCE_DEPLOY_SAFE = path.resolve(PAPER_JOURNAL_FILE).startsWith(RENDER_PERSISTENT_DATA_DIR + path.sep);
+const PAPER_MAX_EXECUTION_LAG_MS = 5 * 60 * 1000;
 
 const PAPER_STUDY_VERSION = "Oliver-v1.2_vs_AgentC-v1_vs_AgentCChopLock-v1_vs_Rider-v1";
 const PAPER_AGENT_NAMES = ["Oliver", "AgentC", "Rider", "AgentCChopLock"];
@@ -224,6 +229,28 @@ function studyDateKey(time) {
 
 function regularSessionForCandle(candle) {
   return getMarketSession(new Date(candle.time)).regularHours;
+}
+
+function paperExecutionGate(candle, now = new Date()) {
+  if (!candle || !Number.isFinite(Date.parse(candle.time))) {
+    return { allow: false, reason: "Invalid completed-candle timestamp." };
+  }
+  const currentSession = getMarketSession(now);
+  if (!currentSession.regularHours) {
+    return { allow: false, reason: "Current time is outside the regular market session." };
+  }
+  if (!regularSessionForCandle(candle)) {
+    return { allow: false, reason: "Candle is outside the regular market session." };
+  }
+  if (studyDateKey(candle.time) !== studyDateKey(now)) {
+    return { allow: false, reason: "Candle is not from the current trading day." };
+  }
+  const completedAt = Date.parse(candle.time) + 120000;
+  const age = now.getTime() - completedAt;
+  if (!Number.isFinite(age) || age < -30000 || age > PAPER_MAX_EXECUTION_LAG_MS) {
+    return { allow: false, reason: "Completed candle is too old for a new live paper decision." };
+  }
+  return { allow: true, reason: "Fresh regular-session candle." };
 }
 
 function recordPaperDecision(agentName, decision) {
@@ -634,7 +661,11 @@ function runIndependentPaperStudy(candles) {
   if (!candles.length) return;
   try {
     const candle = candles[candles.length - 1];
-    if (!regularSessionForCandle(candle)) return;
+    const executionGate = paperExecutionGate(candle);
+    if (!executionGate.allow) {
+      console.log(`PAPER STUDY SKIP ${candle.time} — ${executionGate.reason}`);
+      return;
+    }
     const runners = { Oliver: runOliverPaperTrader, AgentC: runAgentCPaperTrader,
       Rider: runRiderPaperTrader, AgentCChopLock: runAgentCChopLockPaperTrader };
     const pending = PAPER_AGENT_NAMES.filter(name => !paperStudy.agents[name].lastProcessedCandle ||
@@ -689,7 +720,7 @@ function paperDailySummary(dateKey = studyDateKey(new Date())) {
     return {
       trades: trades.length, favorable, unfavorable, flat,
       totalUnderlyingMove: Number(totalUnderlyingMove.toFixed(4)),
-      openPosition: agent.position,
+      openPosition: agent.position && studyDateKey(agent.position.entryTime) === dateKey ? agent.position : null,
       tradeLog: trades
     };
   };
@@ -5567,13 +5598,13 @@ function buildDashboardView(now = Date.now()) {
     c.strength.shrinking ? "The latest candle is smaller; pressure is easing." : "";
   const warning = [
     !session.regularHours ? "Market closed — live entry cues are paused." : !fresh ? "Fresh data unavailable — entry cues are paused." : "",
-    chopActive ? "No clear direction — wait for conditions to improve before a new entry." : warningPending ? "Recent candle history is incomplete — wait." : "",
+    chopActive ? `Recent candles are overlapping — new entries restricted; last confirmed direction remains ${direction === "CALL" ? "bullish" : direction === "PUT" ? "bearish" : "unconfirmed"}.` : warningPending ? "Recent candle history is incomplete — wait." : "",
     supportWarning,
     extended ? "The move is stretched; be cautious with a new entry." : "",
     "Check Entry Tracker for your marked trade. Buttons only mark an entry; they do not place orders."
   ].filter(Boolean).join(" ");
   const marketRead = {
-    headline: chopActive ? "Price is moving back and forth without clear direction." :
+    headline: chopActive ? `Recent candles are overlapping. Last confirmed direction remains ${direction === "CALL" ? "bullish" : direction === "PUT" ? "bearish" : "unconfirmed"}.` :
       direction === "WAIT" ? "Neither side has confirmed control." : `${side} have confirmed control.${c.strength.opposition || c.strength.doji || c.strength.shrinking ? " " + c.strength.status + "." : ""}`,
     context: daily.bias === "BULLISH" ? "5-day view: broader conditions favor buyers." :
       daily.bias === "BEARISH" ? "5-day view: broader conditions favor sellers." : "5-day view: broader conditions are mixed or still developing.",
@@ -5587,7 +5618,7 @@ function buildDashboardView(now = Date.now()) {
     hasClose ? { price:lastClose, source:"CANDLE", time:new Date(Date.parse(candleTime)+120000).toISOString() } :
     { price:null, source:"UNAVAILABLE", time:null };
   return {
-    priceDisplay, version:"3.2.11", regularHours:session.regularHours, session:session.session, fresh,
+    priceDisplay, version:"3.2.13", regularHours:session.regularHours, session:session.session, fresh,
     candleTime, quoteTime:latestGOOGLTrade?.time || null, direction, entrySignal:c.analysis.signal,
     pulseDirection, chopState:chop.state, chopActive, warningPending, strength:c.strength,
     candleControl: c.strength.doji ? "NEUTRAL" : c.strength.color === "GREEN" ? "BULLS" : c.strength.color === "RED" ? "BEARS" : "NEUTRAL",
@@ -5595,7 +5626,7 @@ function buildDashboardView(now = Date.now()) {
     hold: { direction:direction === "CALL" ? "BULL" : direction === "PUT" ? "BEAR" : "NONE",
       stage:direction === "WAIT" ? "WAIT" : weak ? "WARNING" : "HOLD",
       headline:direction === "WAIT" ? "WAITING FOR DIRECTION" : `${side.toUpperCase()} CONFIRMED${weak ? " · UNDER PRESSURE" : ""}`,
-      reason:chopActive ? "The last confirmed side is highlighted, but current conditions are choppy. Wait before a new entry." :
+      reason:chopActive ? "Recent candles are overlapping, so new entries are restricted while the last confirmed direction remains visible." :
         supportWarning || "The confirmed direction remains in place until opposing control is confirmed." },
     // Preserve pre-existing risk observations separately from C's control state.
     riskStage:trendHold.stage, changeWatch:battle.changeWatch || "OFF",
@@ -5778,6 +5809,7 @@ const html = `
   min-height: 44px; cursor: pointer; }
 #entryTrackerButton:disabled { opacity: .5; cursor: not-allowed; }
 .entryTrackerFoot { font-size: .8rem; opacity: .8; margin-top: 8px; }
+.dailyTradeResults { font-size:.78rem; font-weight:700; letter-spacing:.02em; margin-top:6px; opacity:.92; }
 
 * {
   box-sizing: border-box;
@@ -6337,7 +6369,7 @@ body { padding: clamp(8px, 1.3vw, 16px); }
 .action { font-size: clamp(17px, 2.2vw, 27px); line-height: 1.15; }
 .phase { font-size: 12px; line-height: 1.25; }
 .entryTracker { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 10px; align-items: center; text-align: left; }
-.entryTrackerTitle, #entryTrackerState, #entryTrackerDetail, .entryTrackerFoot { grid-column: 1; margin: 0; }
+.entryTrackerTitle, #entryTrackerState, #entryTrackerDetail, #dailyTradeResults, .entryTrackerFoot { grid-column: 1; margin: 0; }
 .entryTrackerTitle { font-size: 11px; }
 #entryTrackerState { font-size: 14px; line-height: 1.2; }
 #entryTrackerDetail { font-size: 11px; line-height: 1.25; overflow-wrap: anywhere; }
@@ -6526,7 +6558,7 @@ body { padding: clamp(8px, 1.3vw, 16px); }
 }
 #entryTrackerButton:disabled { opacity:.52; filter:grayscale(.35); cursor:not-allowed; }
 .entryTracker { display:flex !important; text-align:left; }
-.entryTrackerTitle,#entryTrackerState,#entryTrackerDetail,.entryTrackerFoot { margin:0; }
+.entryTrackerTitle,#entryTrackerState,#entryTrackerDetail,#dailyTradeResults,.entryTrackerFoot { margin:0; }
 .entryTrackerTitle { color:#ffdc79; }
 #entryTrackerState { margin-top:4px; }
 #entryTrackerDetail { margin-top:3px; }
@@ -6702,6 +6734,9 @@ body.trade-active .pressureSupport { display:none; }
 .dataStatus { grid-column:1 / -1; text-align:center; font-size:10px; color:#aab8ca; padding:3px; }
 .chopWarning { margin-top:6px; padding:6px 8px; border:1px solid #f5bf45; border-radius:8px; background:#382b13; color:#ffe5a1; font-size:12px; line-height:1.35; overflow-wrap:anywhere; }
 .chopBasis { display:block; margin-top:3px; font-size:10px; opacity:.85; }
+.researchAccess { display:block; width:max-content; max-width:100%; margin:5px 4px 0 auto; padding:3px 7px; border:1px solid #28313d; border-radius:6px; color:#9ba8b8; text-decoration:none; font-size:9px; line-height:1.15; opacity:.72; text-align:right; }
+.researchAccess span { display:block; margin-top:1px; font-size:8px; color:#778493; }
+.researchAccess:hover,.researchAccess:focus { opacity:1; border-color:#526173; outline:none; }
 </style>
 </head>
 
@@ -6806,7 +6841,7 @@ body.trade-active .pressureSupport { display:none; }
       <div class="aiReadTitle" id="actionContext">NEW ENTRY</div>
       <div class="action" id="entryAction">${dashboardSignal.title}</div>
       <div class="phase" id="entryActionDetail">${dashboardSignal.detail}</div>
-      <div class="chopWarning" id="chopWarning" role="status" ${view.chopActive ? "" : "hidden"}>WAIT — No clear direction. Price is moving back and forth. Wait for conditions to improve before a new entry. Existing trade warnings still apply.</div>
+      <div class="chopWarning" id="chopWarning" role="status" ${view.chopActive ? "" : "hidden"}>WAIT — Recent candles are overlapping. New entries are restricted until movement becomes clearer. Existing trade warnings still apply.</div>
     </div>
 
     <div class="aiReadBox holdBox">
@@ -6826,6 +6861,7 @@ body.trade-active .pressureSupport { display:none; }
       <div class="entryTrackerTitle">MY ENTRY TRACKER · GOOGL</div>
       <div id="entryTrackerState">Checking live price and direction…</div>
       <div id="entryTrackerDetail"></div>
+      <div id="dailyTradeResults" class="dailyTradeResults">TODAY: No completed tracked trades</div>
       <div class="entryTrackerFoot">GOOGL marker only. Tracks the stock move from your marked entry; no option P&amp;L or orders.</div>
     </div>
 
@@ -6853,7 +6889,8 @@ body.trade-active .pressureSupport { display:none; }
   </div>
 
   <div class="warning" id="warningSummary">${view.warning}</div>
-  <div class="dataStatus" id="dataStatus">V3.2.11 TEST · Waiting for a fresh price</div>
+  <div class="dataStatus" id="dataStatus">V3.2.13 TEST · Waiting for a fresh price</div>
+  <a class="researchAccess" href="/research" title="Paper-trading research only">Research<span>Paper trades • For testing only</span></a>
 
 </div>
 
@@ -6883,6 +6920,50 @@ refreshMarketClock(); setInterval(refreshMarketClock,1000);
 
 // Browser-only entry marker. No orders and no brokerage access.
 const trackerKey = "bvb-googl-manual-entry-v1";
+const dailyResultsKey = "bvb-googl-daily-results-v1";
+function chicagoDateKey(value = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone:"America/Chicago", year:"numeric", month:"2-digit", day:"2-digit" }).formatToParts(value);
+  const get = type => parts.find(p => p.type === type)?.value || "";
+  return get("year") + "-" + get("month") + "-" + get("day");
+}
+function loadDailyResultStore() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(dailyResultsKey) || "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch (_) { return {}; }
+}
+function saveDailyResultStore(store) {
+  try {
+    const keys = Object.keys(store).sort().slice(-60);
+    const trimmed = {};
+    for (const key of keys) trimmed[key] = Array.isArray(store[key]) ? store[key] : [];
+    localStorage.setItem(dailyResultsKey, JSON.stringify(trimmed));
+    return true;
+  } catch (_) { return false; }
+}
+function recordTrackedTradeResult(entry, exitPrice, exitTime) {
+  const entryCents = cents(entry.price), exitCents = cents(exitPrice);
+  if (!Number.isFinite(entryCents) || !Number.isFinite(exitCents) || entryCents <= 0 || exitCents <= 0) return false;
+  const move = ((exitCents - entryCents) / 100) * (entry.direction === "CALL" ? 1 : -1);
+  const store = loadDailyResultStore();
+  const day = chicagoDateKey(new Date(exitTime));
+  if (!Array.isArray(store[day])) store[day] = [];
+  store[day].push({ symbol:"GOOGL", direction:entry.direction, entry:Number(entry.price), exit:exitCents/100, entryTime:entry.time, exitTime, move:Math.round(move*100)/100 });
+  return saveDailyResultStore(store);
+}
+function renderDailyTradeResults() {
+  const store = loadDailyResultStore();
+  const trades = Array.isArray(store[chicagoDateKey()]) ? store[chicagoDateKey()] : [];
+  if (!trades.length) { setText("dailyTradeResults", "TODAY: No completed tracked trades"); return; }
+  let wins=0, losses=0, flats=0, net=0;
+  for (const trade of trades) {
+    const move = Number(trade.move) || 0;
+    net += move;
+    if (move > 0.0001) wins++; else if (move < -0.0001) losses++; else flats++;
+  }
+  const flatText = flats ? " / " + flats + "F" : "";
+  setText("dailyTradeResults", "TODAY: " + trades.length + " trade" + (trades.length === 1 ? "" : "s") + " • " + wins + "W / " + losses + "L" + flatText + " • Net " + moveText(Math.round(net*100)/100) + " GOOGL move");
+}
 let view = ${JSON.stringify(view)};
 let quote = ${JSON.stringify(latestGOOGLTrade || null)};
 let streamStatus = ${JSON.stringify(alpacaStreamStatus)};
@@ -6920,7 +7001,7 @@ function renderMarket() {
     display.source === "TRADE" ? (fresh && view.regularHours ? "Live trade price" : "Last received trade price") : "Price unavailable";
   setText("liveHeaderPrice", "GOOGL " + (Number.isFinite(display.price) && display.price > 0 ? dollars(display.price) : "—"));
   setText("priceSource", sourceLabel);
-  setText("dataStatus", "V3.2.11 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
+  setText("dataStatus", "V3.2.13 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
     (view.candleTime ? " · Confirmed candle ended " + timeText(new Date(Date.parse(view.candleTime) + 120000).toISOString()) : ""));
   setText("controlHeadline", view.candleControl === "BULLS" ? "BUYERS LEAD THE LAST COMPLETED CANDLE" :
     view.candleControl === "BEARS" ? "SELLERS LEAD THE LAST COMPLETED CANDLE" : "LAST COMPLETED CANDLE SHOWS INDECISION");
@@ -6978,7 +7059,7 @@ function positionGuidance(move, best, giveback) {
       "CONFIRMED WARNING: The trend-support check has broken down. " + context :
       "LIVE + CANDLE WARNING: Giveback and completed-candle risk evidence meet the existing exit-warning rule. " + context));
   if (best >= 0.10 && ratio >= 0.75 && evidence >= 2) return message("REVERSAL", "CAUTION — Reversal risk", priceFact + "LIVE + CANDLE WARNING: Large giveback with opposing risk evidence. Review your exit plan. " + context);
-  if (best >= 0.10 && ratio >= 0.55 && evidence >= 1) return message("PULLBACK", "CAUTION — Gains pulling back", priceFact + "LIVE + CANDLE WARNING: Giveback with candle-based risk evidence. Review your exit plan. " + context);
+  if (best >= 0.10 && ratio >= 0.55 && evidence >= 1) return message("PULLBACK", move <= 0 ? "CAUTION — All tracked gains given back" : "CAUTION — Gains pulling back", priceFact + "LIVE + CANDLE WARNING: Giveback with candle-based risk evidence. Review your exit plan. " + context);
   if (evidence >= 2 || (best >= 0.10 && ratio >= 0.35) || view.hold.stage === "WARNING")
     return message("WEAK", "CAUTION — Review your trade", priceFact + (evidence >= 2 || view.hold.stage === "WARNING" ?
       "CANDLE WARNING: Support is weakening or facing opposition. " : "LIVE WARNING: The giveback threshold has been reached; this alone does not confirm a reversal. ") + "Review your exit plan. " + context);
@@ -7049,7 +7130,7 @@ function renderTracker() {
     '<div class="positionMetric"><span class="positionMetricLabel">BEST</span><span class="positionMetricValue">+'+dollars(best)+'</span></div>' +
     '<div class="positionMetric giveback"><span class="positionMetricLabel">GIVEN BACK</span><span class="positionMetricValue">'+dollars(giveback)+'</span></div>';
 }
-function renderAll() { renderMarket(); renderTracker(); }
+function renderAll() { renderMarket(); renderTracker(); renderDailyTradeResults(); }
 function markEntry(direction) {
   if (trackedEntry || !canMarkNow()) return;
   const next = { symbol:"GOOGL", direction, price:cents(quote.price)/100, time:new Date().toISOString(), sourceTime:quote.time, bestObservedMove:0 };
@@ -7060,7 +7141,17 @@ callButton.addEventListener("click", () => markEntry("CALL"));
 putButton.addEventListener("click", () => markEntry("PUT"));
 endButton.addEventListener("click", () => {
   if (!confirm("End tracking this entry? This does not close your trade.")) return;
-  try { localStorage.removeItem(trackerKey); trackedEntry = null; renderAll(); }
+  const entryToClose = trackedEntry ? { ...trackedEntry } : null;
+  const validExitPrice = Number.isFinite(Number(quote?.price)) && Number(quote?.price) > 0 && Number.isFinite(Date.parse(quote?.time));
+  const exitPrice = validExitPrice ? cents(quote.price)/100 : null;
+  const exitTime = validExitPrice ? new Date().toISOString() : null;
+  try {
+    localStorage.removeItem(trackerKey);
+    trackedEntry = null;
+    const recorded = entryToClose && exitPrice !== null ? recordTrackedTradeResult(entryToClose, exitPrice, exitTime) : false;
+    renderAll();
+    if (!recorded) setText("entryTrackerDetail", "Tracking ended. Daily result was not recorded because a valid GOOGL quote was unavailable.");
+  }
   catch (_) { setText("entryTrackerState", "Could not clear the saved entry. Please try again."); }
 });
 async function syncLivePriceDisplay() {
@@ -7106,6 +7197,82 @@ setTimeout(() => window.location.reload(), 10000);
 
 
 
+function paperAvailableDates() {
+  const dates = new Set([studyDateKey(new Date())]);
+  for (const name of PAPER_AGENT_NAMES) {
+    const agent = paperStudy.agents[name];
+    for (const trade of agent.trades || []) {
+      if (trade.entryTime) dates.add(studyDateKey(trade.entryTime));
+    }
+    if (agent.position?.entryTime) dates.add(studyDateKey(agent.position.entryTime));
+  }
+  return [...dates].sort().reverse();
+}
+
+function researchPersistenceStatus() {
+  return {
+    file: PAPER_JOURNAL_FILE,
+    deploySafe: PAPER_PERSISTENCE_DEPLOY_SAFE,
+    message: PAPER_PERSISTENCE_DEPLOY_SAFE
+      ? "Persistent journal path detected."
+      : "Local instance journal only. For redeploy-safe history, mount a Render Persistent Disk at /var/data or set PAPER_JOURNAL_FILE to a persistent path."
+  };
+}
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>\"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
+}
+
+function formatPaperTime(time) {
+  if (!time || !Number.isFinite(Date.parse(time))) return "—";
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Chicago", hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true
+  }).format(new Date(time)) + " CT";
+}
+
+app.get("/research", authorizeBVBEvents, (req, res) => {
+  const requested = String(req.query.date || "").trim();
+  const dateKey = /^\d{4}-\d{2}-\d{2}$/.test(requested) ? requested : studyDateKey(new Date());
+  const summary = paperDailySummary(dateKey);
+  const persistence = researchPersistenceStatus();
+  const rows = PAPER_AGENT_NAMES.map(name => {
+    const a = summary[name];
+    const open = a.openPosition ? `${a.openPosition.direction} @ $${Number(a.openPosition.entryPrice).toFixed(2)}` : "FLAT";
+    return `<tr><td>${escapeHtml(name)}</td><td>${a.trades}</td><td>${a.favorable}</td><td>${a.unfavorable}</td><td>${a.flat}</td><td>${a.totalUnderlyingMove >= 0 ? "+" : ""}$${Number(a.totalUnderlyingMove).toFixed(3)}</td><td>${escapeHtml(open)}</td></tr>`;
+  }).join("");
+  const tradeRows = PAPER_AGENT_NAMES.flatMap(name => (summary[name].tradeLog || []).map(t => ({...t, agent:name})))
+    .sort((a,b) => Date.parse(a.entryTime) - Date.parse(b.entryTime))
+    .map(t => `<tr><td>${escapeHtml(t.agent)}</td><td>${escapeHtml(t.direction)}</td><td>${escapeHtml(formatPaperTime(t.entryTime))}</td><td>$${Number(t.entryPrice).toFixed(2)}</td><td>${escapeHtml(formatPaperTime(t.exitTime))}</td><td>$${Number(t.exitPrice).toFixed(2)}</td><td class="${Number(t.underlyingMove) >= 0 ? "pos" : "neg"}">${Number(t.underlyingMove) >= 0 ? "+" : ""}$${Number(t.underlyingMove).toFixed(3)}</td><td>${escapeHtml(t.exitReason)}</td></tr>`).join("");
+  const options = paperAvailableDates().map(d => `<option value="${d}"${d===dateKey?" selected":""}>${d}</option>`).join("");
+  res.type("html").send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>BVB Research</title><style>
+    body{font-family:system-ui,-apple-system,sans-serif;background:#080c12;color:#e9eef5;margin:0;padding:18px} .wrap{max-width:1100px;margin:auto}
+    h1{font-size:24px;margin:0 0 2px}.sub{color:#9eabbc;font-size:13px;margin-bottom:18px}.bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+    select,a.btn{background:#121923;color:#e9eef5;border:1px solid #344152;border-radius:8px;padding:8px 10px;text-decoration:none;font-size:13px}
+    .notice{border:1px solid ${persistence.deploySafe ? "#315c48" : "#7a5b25"};background:${persistence.deploySafe ? "#10241c" : "#2a2111"};padding:10px;border-radius:9px;font-size:12px;margin:10px 0 16px}
+    table{width:100%;border-collapse:collapse;background:#0e141d;border:1px solid #283342;border-radius:10px;overflow:hidden;margin-bottom:18px}th,td{padding:8px;border-bottom:1px solid #202a37;text-align:left;font-size:12px}th{color:#aeb9c8;background:#121a25}.pos{color:#73d99a}.neg{color:#ff7b86}.note{color:#8f9bad;font-size:11px;margin:8px 0 18px}.scroll{overflow-x:auto}
+    @media(max-width:700px){body{padding:10px}th,td{padding:6px;font-size:11px}}
+  </style></head><body><div class="wrap"><h1>Research</h1><div class="sub">Paper trades • For testing only — not your trades and no brokerage orders</div>
+  <div class="bar"><form method="get"><select name="date" onchange="this.form.submit()">${options}</select></form><a class="btn" href="/paper-study/export.csv?date=${encodeURIComponent(dateKey)}">Export CSV</a><a class="btn" href="/oliver-dashboard">Back to dashboard</a></div>
+  <div class="notice"><b>Journal:</b> ${escapeHtml(persistence.message)}<br><span>${escapeHtml(persistence.file)}</span></div>
+  <h2>Daily summary — ${escapeHtml(dateKey)}</h2><div class="scroll"><table><thead><tr><th>Agent</th><th>Trades</th><th>Wins</th><th>Losses</th><th>Flat</th><th>Net GOOGL move</th><th>Open position</th></tr></thead><tbody>${rows}</tbody></table></div>
+  <div class="note">Underlying GOOGL movement only; not option P/L and before costs. Open positions are shown only for the selected date.</div>
+  <h2>Closed trades</h2><div class="scroll"><table><thead><tr><th>Agent</th><th>Side</th><th>Entry</th><th>Entry price</th><th>Exit</th><th>Exit price</th><th>Move</th><th>Exit reason</th></tr></thead><tbody>${tradeRows || '<tr><td colspan="8">No closed trades recorded for this date.</td></tr>'}</tbody></table></div>
+  </div></body></html>`);
+});
+
+app.get("/paper-study/export.csv", authorizeBVBEvents, (req, res) => {
+  const requested = String(req.query.date || "").trim();
+  const dateKey = /^\d{4}-\d{2}-\d{2}$/.test(requested) ? requested : studyDateKey(new Date());
+  const summary = paperDailySummary(dateKey);
+  const q = value => `"${String(value ?? "").replace(/"/g, '""')}"`;
+  const lines = [["date","agent","direction","entry_time_ct","entry_price","exit_time_ct","exit_price","underlying_move","result","exit_reason"]];
+  for (const name of PAPER_AGENT_NAMES) {
+    for (const t of summary[name].tradeLog || []) lines.push([dateKey,name,t.direction,formatPaperTime(t.entryTime),t.entryPrice,formatPaperTime(t.exitTime),t.exitPrice,t.underlyingMove,t.result,t.exitReason]);
+  }
+  res.set("content-disposition", `attachment; filename="bvb-paper-results-${dateKey}.csv"`);
+  res.type("text/csv").send(lines.map(row => row.map(q).join(",")).join("\n"));
+});
+
 // ==================================================
 // PAPER STUDY JOURNAL / DAILY REPORT
 // Protected by the same BVB event-feed credentials.
@@ -7124,6 +7291,8 @@ app.get("/paper-study", authorizeBVBEvents, (req, res) => {
     },
     updatedAt: paperStudy.updatedAt,
     persistenceFile: PAPER_JOURNAL_FILE,
+    persistence: researchPersistenceStatus(),
+    availableDates: paperAvailableDates(),
     cChopExperiment: paperStudy.cChopExperiment || { status: "PENDING_FLAT_START" },
     agents: paperStudy.agents
   });
