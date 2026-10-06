@@ -49,6 +49,7 @@ function analyzeChopRisk(candles) {
 
 const app = express();
 app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
 
 // Only expose the two dashboard image assets.
 // Do NOT expose the whole application directory with express.static(__dirname),
@@ -74,37 +75,81 @@ function safeEqualText(a, b) {
   return crypto.timingSafeEqual(left, right);
 }
 
-function authorizeBVBEvents(req, res, next) {
-  // Fail closed if protection has not been configured.
-  if (!BVB_EVENT_TOKEN && !(BVB_EVENT_USER && BVB_EVENT_PASSWORD)) {
-    return res.status(503).json({
-      error: "BVB event feed protection is not configured"
-    });
+const RESEARCH_SESSION_COOKIE = "bvb_research_session";
+const RESEARCH_SESSION_MAX_AGE_MS = 8 * 60 * 60 * 1000;
+
+function researchSessionSecret() {
+  return crypto.createHash("sha256")
+    .update(`research|${BVB_EVENT_USER}|${BVB_EVENT_PASSWORD}|${BVB_EVENT_TOKEN}`)
+    .digest();
+}
+
+function createResearchSession() {
+  const payload = Buffer.from(JSON.stringify({ exp: Date.now() + RESEARCH_SESSION_MAX_AGE_MS })).toString("base64url");
+  const sig = crypto.createHmac("sha256", researchSessionSecret()).update(payload).digest("base64url");
+  return `${payload}.${sig}`;
+}
+
+function readCookies(req) {
+  const out = {};
+  for (const part of String(req.get("cookie") || "").split(";")) {
+    const i = part.indexOf("=");
+    if (i < 0) continue;
+    out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
   }
+  return out;
+}
 
+function validResearchSession(req) {
+  const token = readCookies(req)[RESEARCH_SESSION_COOKIE] || "";
+  const dot = token.lastIndexOf(".");
+  if (dot < 1) return false;
+  const payload = token.slice(0, dot);
+  const sig = token.slice(dot + 1);
+  const expected = crypto.createHmac("sha256", researchSessionSecret()).update(payload).digest("base64url");
+  if (!safeEqualText(sig, expected)) return false;
+  try {
+    const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    return Number(data.exp) > Date.now();
+  } catch (_) {
+    return false;
+  }
+}
+
+function hasBVBEventCredentials(req) {
+  if (validResearchSession(req)) return true;
   const auth = String(req.get("authorization") || "");
-
-  // AI/API access: Authorization: Bearer <BVB_EVENT_TOKEN>
   if (BVB_EVENT_TOKEN && auth.startsWith("Bearer ")) {
     const supplied = auth.slice(7).trim();
-    if (safeEqualText(supplied, BVB_EVENT_TOKEN)) return next();
+    if (safeEqualText(supplied, BVB_EVENT_TOKEN)) return true;
   }
-
-  // Owner/browser access: HTTP Basic authentication.
   if (BVB_EVENT_USER && BVB_EVENT_PASSWORD && auth.startsWith("Basic ")) {
     try {
       const decoded = Buffer.from(auth.slice(6), "base64").toString("utf8");
       const separator = decoded.indexOf(":");
       const user = separator >= 0 ? decoded.slice(0, separator) : "";
       const password = separator >= 0 ? decoded.slice(separator + 1) : "";
-      if (safeEqualText(user, BVB_EVENT_USER) && safeEqualText(password, BVB_EVENT_PASSWORD)) {
-        return next();
-      }
+      if (safeEqualText(user, BVB_EVENT_USER) && safeEqualText(password, BVB_EVENT_PASSWORD)) return true;
     } catch (_) {}
   }
+  return false;
+}
 
-  res.set("WWW-Authenticate", 'Basic realm="BVB Events"');
+function authorizeBVBEvents(req, res, next) {
+  if (!BVB_EVENT_TOKEN && !(BVB_EVENT_USER && BVB_EVENT_PASSWORD)) {
+    return res.status(503).json({ error: "BVB event feed protection is not configured" });
+  }
+  if (hasBVBEventCredentials(req)) return next();
   return res.status(401).json({ error: "Unauthorized" });
+}
+
+function authorizeResearchPage(req, res, next) {
+  if (!BVB_EVENT_USER || !BVB_EVENT_PASSWORD) {
+    return res.status(503).type("html").send("<h1>Research login is not configured</h1><p>Set BVB_EVENT_USER and BVB_EVENT_PASSWORD in Render Environment.</p>");
+  }
+  if (hasBVBEventCredentials(req)) return next();
+  const nextUrl = encodeURIComponent(req.originalUrl || "/research");
+  return res.redirect(`/research-login?next=${nextUrl}`);
 }
 
 console.log("API key loaded:", Boolean(ALPACA_API_KEY));
@@ -6889,8 +6934,8 @@ body.trade-active .pressureSupport { display:none; }
   </div>
 
   <div class="warning" id="warningSummary">${view.warning}</div>
-  <div class="dataStatus" id="dataStatus">V3.2.14 TEST · Waiting for a fresh price</div>
-  <a class="researchAccess" href="/research" target="_blank" rel="noopener" title="Paper-trading research only">Research<span>Paper trades • For testing only</span></a>
+  <div class="dataStatus" id="dataStatus">V3.2.15 TEST · Waiting for a fresh price</div>
+  <a class="researchAccess" href="/research" title="Paper-trading research only">Research<span>Paper trades • For testing only</span></a>
 
 </div>
 
@@ -7001,7 +7046,7 @@ function renderMarket() {
     display.source === "TRADE" ? (fresh && view.regularHours ? "Live trade price" : "Last received trade price") : "Price unavailable";
   setText("liveHeaderPrice", "GOOGL " + (Number.isFinite(display.price) && display.price > 0 ? dollars(display.price) : "—"));
   setText("priceSource", sourceLabel);
-  setText("dataStatus", "V3.2.14 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
+  setText("dataStatus", "V3.2.15 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
     (view.candleTime ? " · Confirmed candle ended " + timeText(new Date(Date.parse(view.candleTime) + 120000).toISOString()) : ""));
   setText("controlHeadline", view.candleControl === "BULLS" ? "BUYERS LEAD THE LAST COMPLETED CANDLE" :
     view.candleControl === "BEARS" ? "SELLERS LEAD THE LAST COMPLETED CANDLE" : "LAST COMPLETED CANDLE SHOWS INDECISION");
@@ -7230,7 +7275,37 @@ function formatPaperTime(time) {
   }).format(new Date(time)) + " CT";
 }
 
-app.get("/research", authorizeBVBEvents, (req, res) => {
+app.get("/research-login", (req, res) => {
+  if (!BVB_EVENT_USER || !BVB_EVENT_PASSWORD) {
+    return res.status(503).type("html").send("<h1>Research login is not configured</h1><p>Set BVB_EVENT_USER and BVB_EVENT_PASSWORD in Render Environment.</p>");
+  }
+  const nextUrl = String(req.query.next || "/research");
+  const safeNext = nextUrl.startsWith("/") && !nextUrl.startsWith("//") ? nextUrl : "/research";
+  const failed = req.query.error === "1";
+  res.type("html").send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Research Sign In</title><style>
+    body{font-family:system-ui,-apple-system,sans-serif;background:#080c12;color:#eef3f9;margin:0;min-height:100vh;display:grid;place-items:center;padding:18px}.card{width:min(92vw,420px);background:#101721;border:1px solid #2c3949;border-radius:16px;padding:22px;box-shadow:0 18px 50px #0008}h1{margin:0 0 4px;font-size:24px}.sub{color:#9ba9bb;font-size:13px;margin-bottom:18px}.warn{color:#ff9aa3;background:#2a1217;border:1px solid #67313a;border-radius:8px;padding:9px;margin-bottom:12px;font-size:12px}label{display:block;color:#aeb9c8;font-size:12px;margin:11px 0 5px}input{box-sizing:border-box;width:100%;font-size:16px;padding:12px;border-radius:9px;border:1px solid #3a4758;background:#0a1018;color:#fff}button,a{display:block;box-sizing:border-box;width:100%;margin-top:16px;padding:12px;border-radius:9px;text-align:center;font-weight:700;text-decoration:none}button{border:0;background:#2c8f61;color:white;font-size:16px}a{border:1px solid #344152;color:#b8c3d1;font-size:13px}.note{color:#778698;font-size:11px;margin-top:14px;line-height:1.4}</style></head><body><div class="card"><h1>Research Sign In</h1><div class="sub">Paper trades • For testing only</div>${failed?'<div class="warn">Username or password was not accepted. Try again.</div>':''}<form method="post" action="/research-login"><input type="hidden" name="next" value="${escapeHtml(safeNext)}"><label>User name</label><input name="username" autocomplete="username" autocapitalize="none" required><label>Password</label><input name="password" type="password" autocomplete="current-password" required><button type="submit">Sign In</button></form><a href="/oliver-dashboard">Back to dashboard</a><div class="note">Use the BVB_EVENT_USER and BVB_EVENT_PASSWORD values configured in Render. These are not Alpaca credentials.</div></div></body></html>`);
+});
+
+app.post("/research-login", (req, res) => {
+  const user = String(req.body?.username || "");
+  const password = String(req.body?.password || "");
+  const nextUrl = String(req.body?.next || "/research");
+  const safeNext = nextUrl.startsWith("/") && !nextUrl.startsWith("//") ? nextUrl : "/research";
+  if (!(BVB_EVENT_USER && BVB_EVENT_PASSWORD) || !safeEqualText(user, BVB_EVENT_USER) || !safeEqualText(password, BVB_EVENT_PASSWORD)) {
+    return res.redirect(`/research-login?error=1&next=${encodeURIComponent(safeNext)}`);
+  }
+  const secure = String(req.get("x-forwarded-proto") || "").includes("https") || req.secure;
+  const cookie = `${RESEARCH_SESSION_COOKIE}=${encodeURIComponent(createResearchSession())}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.floor(RESEARCH_SESSION_MAX_AGE_MS/1000)}${secure?"; Secure":""}`;
+  res.set("Set-Cookie", cookie);
+  return res.redirect(safeNext);
+});
+
+app.get("/research-logout", (req, res) => {
+  res.set("Set-Cookie", `${RESEARCH_SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+  res.redirect("/oliver-dashboard");
+});
+
+app.get("/research", authorizeResearchPage, (req, res) => {
   const requested = String(req.query.date || "").trim();
   const dateKey = /^\d{4}-\d{2}-\d{2}$/.test(requested) ? requested : studyDateKey(new Date());
   const summary = paperDailySummary(dateKey);
@@ -7252,7 +7327,7 @@ app.get("/research", authorizeBVBEvents, (req, res) => {
     table{width:100%;border-collapse:collapse;background:#0e141d;border:1px solid #283342;border-radius:10px;overflow:hidden;margin-bottom:18px}th,td{padding:8px;border-bottom:1px solid #202a37;text-align:left;font-size:12px}th{color:#aeb9c8;background:#121a25}.pos{color:#73d99a}.neg{color:#ff7b86}.note{color:#8f9bad;font-size:11px;margin:8px 0 18px}.scroll{overflow-x:auto}
     @media(max-width:700px){body{padding:10px}th,td{padding:6px;font-size:11px}}
   </style></head><body><div class="wrap"><h1>Research</h1><div class="sub">Paper trades • For testing only — not your trades and no brokerage orders</div>
-  <div class="bar"><form method="get"><select name="date" onchange="this.form.submit()">${options}</select></form><a class="btn" href="/paper-study/export.csv?date=${encodeURIComponent(dateKey)}">Export CSV</a><a class="btn" href="/oliver-dashboard">Back to dashboard</a></div>
+  <div class="bar"><form method="get"><select name="date" onchange="this.form.submit()">${options}</select></form><a class="btn" href="/paper-study/export.csv?date=${encodeURIComponent(dateKey)}">Export CSV</a><a class="btn" href="/oliver-dashboard">Back to dashboard</a><a class="btn" href="/research-logout">Sign out</a></div>
   <div class="notice"><b>Journal:</b> ${escapeHtml(persistence.message)}<br><span>${escapeHtml(persistence.file)}</span></div>
   <h2>Daily summary — ${escapeHtml(dateKey)}</h2><div class="scroll"><table><thead><tr><th>Agent</th><th>Trades</th><th>Wins</th><th>Losses</th><th>Flat</th><th>Net GOOGL move</th><th>Open position</th></tr></thead><tbody>${rows}</tbody></table></div>
   <div class="note">Underlying GOOGL movement only; not option P/L and before costs. Open positions are shown only for the selected date.</div>
