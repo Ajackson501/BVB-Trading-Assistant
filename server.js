@@ -6889,8 +6889,8 @@ body.trade-active .pressureSupport { display:none; }
   </div>
 
   <div class="warning" id="warningSummary">${view.warning}</div>
-  <div class="dataStatus" id="dataStatus">V3.2.13 TEST · Waiting for a fresh price</div>
-  <a class="researchAccess" href="/research" title="Paper-trading research only">Research<span>Paper trades • For testing only</span></a>
+  <div class="dataStatus" id="dataStatus">V3.2.14 TEST · Waiting for a fresh price</div>
+  <a class="researchAccess" href="/research" target="_blank" rel="noopener" title="Paper-trading research only">Research<span>Paper trades • For testing only</span></a>
 
 </div>
 
@@ -7001,7 +7001,7 @@ function renderMarket() {
     display.source === "TRADE" ? (fresh && view.regularHours ? "Live trade price" : "Last received trade price") : "Price unavailable";
   setText("liveHeaderPrice", "GOOGL " + (Number.isFinite(display.price) && display.price > 0 ? dollars(display.price) : "—"));
   setText("priceSource", sourceLabel);
-  setText("dataStatus", "V3.2.13 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
+  setText("dataStatus", "V3.2.14 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
     (view.candleTime ? " · Confirmed candle ended " + timeText(new Date(Date.parse(view.candleTime) + 120000).toISOString()) : ""));
   setText("controlHeadline", view.candleControl === "BULLS" ? "BUYERS LEAD THE LAST COMPLETED CANDLE" :
     view.candleControl === "BEARS" ? "SELLERS LEAD THE LAST COMPLETED CANDLE" : "LAST COMPLETED CANDLE SHOWS INDECISION");
