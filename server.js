@@ -187,7 +187,7 @@ let dailyHistorySeeded = false;
 
 
 // ==================================================
-// INDEPENDENT PAPER-TRADING STUDY — OLIVER + AGENT C + RIDER
+// INDEPENDENT PAPER-TRADING STUDY — OLIVER + AGENT B + AGENT C + RIDER
 // ==================================================
 // Uses the same GOOGL trade stream already received by BVB. Rider also loads
 // completed 5-minute and 15-minute history once at startup and aggregates both
@@ -206,16 +206,47 @@ const PAPER_JOURNAL_FILE = process.env.PAPER_JOURNAL_FILE ||
 const RENDER_PERSISTENT_DATA_DIR = "/var/data";
 const PAPER_PERSISTENCE_DEPLOY_SAFE = path.resolve(PAPER_JOURNAL_FILE).startsWith(RENDER_PERSISTENT_DATA_DIR + path.sep);
 const PAPER_MAX_EXECUTION_LAG_MS = 5 * 60 * 1000;
+const PAPER_LIVE_TRADE_MAX_AGE_MS = 60 * 1000;
 
-const PAPER_STUDY_VERSION = "Oliver-v1.2_vs_AgentC-v1_vs_AgentCChopLock-v1_vs_Rider-v1";
-const PAPER_AGENT_NAMES = ["Oliver", "AgentC", "Rider", "AgentCChopLock"];
+// ==================================================
+// ANALYSIS TIMING AUDIT — LOCAL OBSERVABILITY ONLY
+// ==================================================
+// Records timing from the existing GOOGL stream through candle finalization,
+// completed-candle analysis, first dashboard delivery, and first client render.
+// This does not open another Alpaca connection and does not poll Alpaca.
+const ANALYSIS_TIMING_FILE = process.env.ANALYSIS_TIMING_FILE ||
+  (fs.existsSync("/var/data")
+    ? path.join("/var/data", "bvb-analysis-timing.json")
+    : path.join(__dirname, "bvb-analysis-timing.json"));
+const ANALYSIS_TIMING_DEPLOY_SAFE = path.resolve(ANALYSIS_TIMING_FILE).startsWith(RENDER_PERSISTENT_DATA_DIR + path.sep);
+const ANALYSIS_TIMING_MAX_RECORDS = 1000;
+let analysisTimingAudit = {
+  version: "AnalysisTiming-v1", symbol: "GOOGL", timeframe: "2Min", updatedAt: null, records: []
+};
+let developingCandleTiming = null;
+
+const PAPER_STUDY_VERSION = "Oliver-v1.2_vs_OliverLive-v1_vs_AgentB-v1_vs_AgentC-v1_vs_AgentCChopLock-v1_vs_Rider-v1";
+const PAPER_AGENT_NAMES = ["Oliver", "OliverLive", "AgentB", "AgentC", "Rider", "AgentCChopLock"];
 // Experimental settings, not optimized or established profitable rules.
 const C_CHOP_TEST = Object.freeze({ version: "C-ChopLock-v1", rangeBars: 8,
   expansionMultiple: 1.5, minBodyFraction: 0.6, breakoutBufferFraction: 0.1,
   followThroughBars: 2 });
 
+// Agent B paper-only automation of the established Momentum Trader rules.
+// The strategy itself is preserved: 2-minute primary structure, 5-minute
+// confirmation, 8/20/200 alignment, accomplished breakouts/continuation,
+// named momentum events, support/resistance, no chasing, and fast invalidation.
+// Numeric thresholds below are implementation parameters for this paper test,
+// not claims of historical profitability or new discretionary rules.
+const AGENT_B_TEST = Object.freeze({
+  version: "AgentB-Momentum-v1",
+  breakoutLookback: 6,
+  noChaseMaxAverageRanges: 1.0,
+  tailWickToBody: 1.5
+});
+
 function newPaperAgentState() {
-  return { position: null, trades: [], decisions: [], lastProcessedCandle: null, lastEvaluation: null };
+  return { position: null, trades: [], decisions: [], lastProcessedCandle: null, lastEvaluation: null, pendingSetup: null };
 }
 
 let paperStudy = {
@@ -225,11 +256,106 @@ let paperStudy = {
   updatedAt: null,
   agents: {
     Oliver: newPaperAgentState(),
+    OliverLive: newPaperAgentState(),
+    AgentB: newPaperAgentState(),
     AgentC: newPaperAgentState(),
     Rider: newPaperAgentState(),
     AgentCChopLock: newPaperAgentState()
   }
 };
+
+function loadAnalysisTimingAudit() {
+  try {
+    if (!fs.existsSync(ANALYSIS_TIMING_FILE)) return;
+    const parsed = JSON.parse(fs.readFileSync(ANALYSIS_TIMING_FILE, "utf8"));
+    if (Array.isArray(parsed?.records)) {
+      analysisTimingAudit = {
+        version: "AnalysisTiming-v1", symbol: "GOOGL", timeframe: "2Min",
+        updatedAt: parsed.updatedAt || null, records: parsed.records.slice(-ANALYSIS_TIMING_MAX_RECORDS)
+      };
+      console.log(`Analysis timing audit loaded from ${ANALYSIS_TIMING_FILE}`);
+    }
+  } catch (error) {
+    console.error("Unable to load analysis timing audit:", error.message);
+  }
+}
+
+function saveAnalysisTimingAudit() {
+  try {
+    analysisTimingAudit.updatedAt = new Date().toISOString();
+    analysisTimingAudit.records = analysisTimingAudit.records.slice(-ANALYSIS_TIMING_MAX_RECORDS);
+    const directory = path.dirname(ANALYSIS_TIMING_FILE);
+    fs.mkdirSync(directory, { recursive: true });
+    const temp = `${ANALYSIS_TIMING_FILE}.tmp`;
+    fs.writeFileSync(temp, JSON.stringify(analysisTimingAudit, null, 2));
+    fs.renameSync(temp, ANALYSIS_TIMING_FILE);
+  } catch (error) {
+    console.error("Unable to save analysis timing audit:", error.message);
+  }
+}
+
+function analysisTimingRecord(candleTime) {
+  return analysisTimingAudit.records.find(r => r.candleTime === candleTime) || null;
+}
+
+function analysisTimingRecordsForDate(dateKey) {
+  return analysisTimingAudit.records.filter(r => studyDateKey(r.candleTime) === dateKey);
+}
+
+function timingMs(later, earlier) {
+  const a = Date.parse(later), b = Date.parse(earlier);
+  return Number.isFinite(a) && Number.isFinite(b) ? a - b : null;
+}
+
+function recordCompletedCandleTiming({ candle, timing, rollover, finalizedAt, analysisStartedAt, analysisFinishedAt, trendAnalysis }) {
+  if (!candle?.time || !timing?.lastTradeSourceTime) return null;
+  const candleEnd = new Date(Date.parse(candle.time) + 120000).toISOString();
+  const next = {
+    candleTime: candle.time, candleEnd,
+    open:Number(candle.open), high:Number(candle.high), low:Number(candle.low), close:Number(candle.close), volume:Number(candle.volume)||0,
+    firstTradeSourceTime:timing.firstTradeSourceTime||null, firstTradeReceivedAt:timing.firstTradeReceivedAt||null,
+    lastTradeSourceTime:timing.lastTradeSourceTime||null, lastTradeReceivedAt:timing.lastTradeReceivedAt||null,
+    tradeCount:Number(timing.tradeCount)||0,
+    sourceToServerLastTradeMs:timingMs(timing.lastTradeReceivedAt, timing.lastTradeSourceTime),
+    rolloverTradeSourceTime:rollover?.sourceTime || null, rolloverTradeReceivedAt:rollover?.receivedAt || null,
+    firstTradeAfterBoundaryMs:timingMs(rollover?.sourceTime, candleEnd),
+    rolloverSourceToServerMs:timingMs(rollover?.receivedAt, rollover?.sourceTime),
+    finalizedAt, candleFinalizeDelayMs:timingMs(finalizedAt, candleEnd),
+    analysisStartedAt, analysisFinishedAt, analysisDurationMs:timingMs(analysisFinishedAt, analysisStartedAt),
+    battle:trendAnalysis ? {control:trendAnalysis.control||"NEUTRAL",action:trendAnalysis.action||"WAIT",phase:trendAnalysis.phase||"UNKNOWN",changeWatch:trendAnalysis.changeWatch||"OFF",entryReady:Boolean(trendAnalysis.entryReady),entryDirection:trendAnalysis.entryDirection||"NONE"}:null,
+    trendHold:{stage:trendHold.stage||"WAIT",direction:trendHold.direction||"NONE",reason:trendHold.reason||""},
+    firstDashboardServedAt:null,dashboardAfterAnalysisMs:null,dashboardState:null,
+    firstClientRenderReceivedAt:null,clientReportedRenderedAt:null,screenAfterAnalysisMs:null
+  };
+  const index = analysisTimingAudit.records.findIndex(r => r.candleTime === candle.time);
+  if (index >= 0) analysisTimingAudit.records[index] = { ...analysisTimingAudit.records[index], ...next };
+  else analysisTimingAudit.records.push(next);
+  saveAnalysisTimingAudit();
+  return next;
+}
+
+function markAnalysisTimingDashboardServed(candleTime, dashboard, servedAt = new Date().toISOString()) {
+  const record = analysisTimingRecord(candleTime);
+  if (!record || record.firstDashboardServedAt) return record;
+  record.firstDashboardServedAt = servedAt;
+  record.dashboardAfterAnalysisMs = timingMs(servedAt, record.analysisFinishedAt);
+  record.dashboardState = dashboard ? {
+    direction:dashboard.direction||"WAIT", candleControl:dashboard.candleControl||"NEUTRAL", chopState:dashboard.chopState||"WAIT",
+    actionTitle:dashboard.action?.title||"WAIT", riskStage:dashboard.riskStage||"WAIT", entrySignal:dashboard.entrySignal||"WAIT"
+  } : null;
+  saveAnalysisTimingAudit();
+  return record;
+}
+
+function markAnalysisTimingClientRender(candleTime, clientRenderedAt, receivedAt = new Date().toISOString()) {
+  const record = analysisTimingRecord(candleTime);
+  if (!record || record.firstClientRenderReceivedAt) return record;
+  record.firstClientRenderReceivedAt = receivedAt;
+  record.clientReportedRenderedAt = Number.isFinite(Date.parse(clientRenderedAt)) ? clientRenderedAt : null;
+  record.screenAfterAnalysisMs = timingMs(receivedAt, record.analysisFinishedAt);
+  saveAnalysisTimingAudit();
+  return record;
+}
 
 function loadPaperStudy() {
   try {
@@ -238,7 +364,9 @@ function loadPaperStudy() {
     if (parsed?.agents?.Oliver && parsed?.agents?.AgentC) {
       paperStudy = parsed;
       paperStudy.version = PAPER_STUDY_VERSION;
-      // Migrate earlier Oliver/Agent C journals without discarding their data.
+      // Migrate earlier journals without discarding their data.
+      if (!paperStudy.agents.OliverLive) paperStudy.agents.OliverLive = newPaperAgentState();
+      if (!paperStudy.agents.AgentB) paperStudy.agents.AgentB = newPaperAgentState();
       if (!paperStudy.agents.Rider) paperStudy.agents.Rider = newPaperAgentState();
       if (!paperStudy.agents.AgentCChopLock) paperStudy.agents.AgentCChopLock = newPaperAgentState();
       for (const name of PAPER_AGENT_NAMES) {
@@ -247,6 +375,7 @@ function loadPaperStudy() {
         if (!Array.isArray(agent.decisions)) agent.decisions = [];
         if (!("lastProcessedCandle" in agent)) agent.lastProcessedCandle = null;
         if (!("lastEvaluation" in agent)) agent.lastEvaluation = null;
+        if (!("pendingSetup" in agent)) agent.pendingSetup = null;
       }
       console.log(`Paper study loaded from ${PAPER_JOURNAL_FILE}`);
     }
@@ -296,6 +425,25 @@ function paperExecutionGate(candle, now = new Date()) {
     return { allow: false, reason: "Completed candle is too old for a new live paper decision." };
   }
   return { allow: true, reason: "Fresh regular-session candle." };
+}
+
+function livePaperExecutionGate(trade, now = new Date()) {
+  if (!trade || !Number.isFinite(Number(trade.price)) || !Number.isFinite(Date.parse(trade.time))) {
+    return { allow: false, reason: "Invalid live trade." };
+  }
+  const currentSession = getMarketSession(now);
+  const tradeSession = getMarketSession(new Date(trade.time));
+  if (!currentSession.regularHours || !tradeSession.regularHours) {
+    return { allow: false, reason: "Live trade is outside the regular market session." };
+  }
+  if (studyDateKey(trade.time) !== studyDateKey(now)) {
+    return { allow: false, reason: "Live trade is not from the current trading day." };
+  }
+  const age = now.getTime() - Date.parse(trade.time);
+  if (!Number.isFinite(age) || age < -5000 || age > PAPER_LIVE_TRADE_MAX_AGE_MS) {
+    return { allow: false, reason: "Live trade is too old for paper execution." };
+  }
+  return { allow: true, reason: "Fresh regular-session live trade." };
 }
 
 function recordPaperDecision(agentName, decision) {
@@ -379,6 +527,60 @@ function closePaperPosition(agentName, candle, reason, metadata = {}) {
   return true;
 }
 
+function openPaperPositionAtLivePrice(agentName, direction, trade, reason, metadata = {}) {
+  const agent = paperStudy.agents[agentName];
+  const price = Number(trade?.price);
+  if (!agent || agent.position || !Number.isFinite(price) || !trade?.time) return false;
+  agent.position = {
+    direction, entryTime: trade.time, entryPrice: price, entryReason: reason, entryMetadata: metadata,
+    bestPrice: price, worstPrice: price, barsHeld: 0
+  };
+  agent.pendingSetup = null;
+  agent.lastEvaluation = { time: trade.time, signal: `HOLD_${direction}`, reason: "Live trigger crossed; paper position opened." };
+  recordPaperDecision(agentName, { time: trade.time, type: "ENTRY", direction, price, reason, execution: "LIVE_TRADE" });
+  savePaperStudy();
+  console.log(`${agentName} PAPER ENTRY ${direction} @ ${price} — ${reason}`);
+  return true;
+}
+
+function updateLivePaperExcursion(position, price) {
+  const p = Number(price);
+  if (!position || !Number.isFinite(p)) return;
+  if (position.direction === "CALL") {
+    position.bestPrice = Math.max(Number(position.bestPrice), p);
+    position.worstPrice = Math.min(Number(position.worstPrice), p);
+  } else {
+    position.bestPrice = Math.min(Number(position.bestPrice), p);
+    position.worstPrice = Math.max(Number(position.worstPrice), p);
+  }
+}
+
+function closePaperPositionAtLivePrice(agentName, trade, reason, metadata = {}) {
+  const agent = paperStudy.agents[agentName];
+  const exitPrice = Number(trade?.price);
+  if (!agent?.position || !Number.isFinite(exitPrice) || !trade?.time) return false;
+  const p = agent.position;
+  updateLivePaperExcursion(p, exitPrice);
+  const signedMove = p.direction === "CALL" ? exitPrice - p.entryPrice : p.entryPrice - exitPrice;
+  const favorableMove = p.direction === "CALL" ? p.bestPrice - p.entryPrice : p.entryPrice - p.bestPrice;
+  const adverseMove = p.direction === "CALL" ? p.worstPrice - p.entryPrice : p.entryPrice - p.worstPrice;
+  const tradeRecord = {
+    agent: agentName, direction: p.direction, entryTime: p.entryTime, entryPrice: p.entryPrice,
+    entryReason: p.entryReason, exitTime: trade.time, exitPrice, exitReason: reason, barsHeld: p.barsHeld,
+    underlyingMove: Number(signedMove.toFixed(4)), maxFavorableMove: Number(favorableMove.toFixed(4)),
+    maxAdverseMove: Number(adverseMove.toFixed(4)),
+    result: signedMove > 0 ? "FAVORABLE" : signedMove < 0 ? "UNFAVORABLE" : "FLAT", metadata
+  };
+  agent.trades.push(tradeRecord);
+  agent.position = null;
+  agent.lastEvaluation = { time: trade.time, signal: "WAIT", reason };
+  recordPaperDecision(agentName, { time: trade.time, type: "EXIT", direction: tradeRecord.direction,
+    price: exitPrice, reason, underlyingMove: tradeRecord.underlyingMove, execution: "LIVE_TRADE" });
+  savePaperStudy();
+  console.log(`${agentName} PAPER EXIT ${tradeRecord.direction} @ ${exitPrice} — ${reason}`);
+  return true;
+}
+
 function analyzeAgentCPaper(candles) {
   const ha = buildHeikinAshi(candles);
   if (ha.length < 4) return { signal: "WAIT", reason: "Need more HA candles." };
@@ -410,6 +612,152 @@ function analyzeAgentCPaper(candles) {
     noLowerWick: current.noLowerWick,
     noUpperWick: current.noUpperWick
   };
+}
+
+
+function analyzeAgentBPaper(candles2m, candles5m) {
+  if (candles2m.length < 201 || candles5m.length < 21) {
+    return { signal: "WAIT", reason: "Waiting for enough completed 2-minute and 5-minute history." };
+  }
+
+  const current = candles2m.at(-1);
+  const previous = candles2m.at(-2);
+  const sma8 = calculateSMA(candles2m, 8);
+  const sma20 = calculateSMA(candles2m, 20);
+  const sma200 = calculateSMA(candles2m, 200);
+  const prev8 = calculatePreviousSMA(candles2m, 8);
+  const prev20 = calculatePreviousSMA(candles2m, 20);
+  const c5 = candles5m.at(-1);
+  const sma8_5 = calculateSMA(candles5m, 8);
+  const sma20_5 = calculateSMA(candles5m, 20);
+  const prev8_5 = calculatePreviousSMA(candles5m, 8);
+
+  const price = Number(current.close);
+  const bull2 = price > sma8 && sma8 > sma20 && sma20 > sma200 && sma8 >= prev8 && sma20 >= prev20;
+  const bear2 = price < sma8 && sma8 < sma20 && sma20 < sma200 && sma8 <= prev8 && sma20 <= prev20;
+  const bull5 = Number(c5.close) > sma8_5 && sma8_5 > sma20_5 && sma8_5 >= prev8_5;
+  const bear5 = Number(c5.close) < sma8_5 && sma8_5 < sma20_5 && sma8_5 <= prev8_5;
+
+  const lookback = AGENT_B_TEST.breakoutLookback;
+  const prior = candles2m.slice(-(lookback + 1), -1);
+  const beforePrevious = candles2m.slice(-(lookback + 2), -2);
+  const resistance = Math.max(...prior.map(c => Number(c.high)));
+  const support = Math.min(...prior.map(c => Number(c.low)));
+  const previousResistance = Math.max(...beforePrevious.map(c => Number(c.high)));
+  const previousSupport = Math.min(...beforePrevious.map(c => Number(c.low)));
+  const avgRange = prior.reduce((sum, c) => sum + Math.max(0, Number(c.high) - Number(c.low)), 0) / prior.length;
+  const avgBody = prior.reduce((sum, c) => sum + Math.abs(Number(c.close) - Number(c.open)), 0) / prior.length;
+  const body = Math.abs(Number(current.close) - Number(current.open));
+  const upperWick = Math.max(0, Number(current.high) - Math.max(Number(current.open), Number(current.close)));
+  const lowerWick = Math.max(0, Math.min(Number(current.open), Number(current.close)) - Number(current.low));
+  const green = Number(current.close) > Number(current.open);
+  const red = Number(current.close) < Number(current.open);
+  const prevGreen = Number(previous.close) > Number(previous.open);
+  const prevRed = Number(previous.close) < Number(previous.open);
+
+  const expansion = detectExpansion(candles2m);
+  const bullishTakeover = isBullishTakeover(previous, current);
+  const bearishTakeover = isBearishTakeover(previous, current);
+  const bullishTail = green && lowerWick >= Math.max(0.01, body) * AGENT_B_TEST.tailWickToBody;
+  const bearishTail = red && upperWick >= Math.max(0.01, body) * AGENT_B_TEST.tailWickToBody;
+  const bullishColorChange = green && prevRed;
+  const bearishColorChange = red && prevGreen;
+
+  const callBreak = price > resistance;
+  const putBreak = price < support;
+  const callContinuation = Number(previous.close) > previousResistance && price > previousResistance && price >= Number(previous.close);
+  const putContinuation = Number(previous.close) < previousSupport && price < previousSupport && price <= Number(previous.close);
+  const callBoundary = callBreak ? resistance : previousResistance;
+  const putBoundary = putBreak ? support : previousSupport;
+  const callNoChase = (price - callBoundary) <= Math.max(0.01, avgRange * AGENT_B_TEST.noChaseMaxAverageRanges);
+  const putNoChase = (putBoundary - price) <= Math.max(0.01, avgRange * AGENT_B_TEST.noChaseMaxAverageRanges);
+  const bullishMomentum = expansion === "GREEN" || bullishTakeover || bullishTail || (green && body >= Math.max(0.01, avgBody)) || callContinuation;
+  const bearishMomentum = expansion === "RED" || bearishTakeover || bearishTail || (red && body >= Math.max(0.01, avgBody)) || putContinuation;
+  const chop = analyzeChopRisk(candles2m);
+  const clean = chop.state === "CLEAR";
+
+  const call = bull2 && bull5 && clean && (callBreak || callContinuation) && bullishMomentum && callNoChase;
+  const put = bear2 && bear5 && clean && (putBreak || putContinuation) && bearishMomentum && putNoChase;
+
+  const event = call || put
+    ? expansion === (call ? "GREEN" : "RED") ? "ELEPHANT_EXPANSION"
+      : (call ? bullishTakeover : bearishTakeover) ? "180_TAKEOVER"
+      : (call ? bullishTail : bearishTail) ? "TAIL_REJECTION"
+      : (call ? bullishColorChange : bearishColorChange) ? "COLOR_CHANGE"
+      : (call ? callContinuation : putContinuation) ? "CONTINUATION"
+      : "BREAKOUT"
+    : "NONE";
+
+  const signal = call ? "CALL" : put ? "PUT" : "WAIT";
+  const triggerPrice = call ? callBoundary : put ? putBoundary : null;
+  const invalidationPrice = call ? callBoundary : put ? putBoundary : null;
+  const reason = call
+    ? `Momentum CALL: 2-minute 8/20/200 and 5-minute confirmation aligned; close accomplished resistance with ${event.toLowerCase().replaceAll("_", " ")} and is not extended.`
+    : put
+    ? `Momentum PUT: 2-minute 8/20/200 and 5-minute confirmation aligned; close accomplished support with ${event.toLowerCase().replaceAll("_", " ")} and is not extended.`
+    : !clean
+    ? `Agent B WAIT: ${chop.state.toLowerCase()} conditions; do not trade compression/chop.`
+    : "Agent B WAIT: no completed momentum breakout/continuation with full alignment and a defined invalidation.";
+
+  return {
+    signal, reason, event,
+    trend: bull2 ? "BULLISH" : bear2 ? "BEARISH" : "NEUTRAL",
+    fiveMinuteConfirmation: bull5 ? "BULLISH" : bear5 ? "BEARISH" : "NEUTRAL",
+    chopState: chop.state,
+    support: Number(support.toFixed(4)), resistance: Number(resistance.toFixed(4)),
+    triggerPrice: Number.isFinite(triggerPrice) ? Number(triggerPrice.toFixed(4)) : null,
+    invalidationPrice: Number.isFinite(invalidationPrice) ? Number(invalidationPrice.toFixed(4)) : null,
+    noChase: call ? callNoChase : put ? putNoChase : null,
+    sma8: Number(sma8.toFixed(4)), sma20: Number(sma20.toFixed(4)), sma200: Number(sma200.toFixed(4)),
+    sma8_5: Number(sma8_5.toFixed(4)), sma20_5: Number(sma20_5.toFixed(4)),
+    targetPrice: null,
+    risk: "Fast invalidation if the completed close loses the breakout boundary or the aligned momentum structure fails."
+  };
+}
+
+function runAgentBPaperTrader(candles) {
+  const candle = candles.at(-1);
+  if (!candle || !regularSessionForCandle(candle)) return;
+  const agent = paperStudy.agents.AgentB;
+  const analysis = analyzeAgentBPaper(candles, riderCandles5m);
+  agent.lastEvaluation = {
+    time: candle.time,
+    signal: agent.position ? `HOLD_${agent.position.direction}` : analysis.signal,
+    reason: agent.position ? "Managing an open momentum paper position." : analysis.reason,
+    analysis
+  };
+
+  if (agent.position) {
+    updatePaperExcursion(agent.position, candle);
+    const p = agent.position;
+    const boundary = Number(p.entryMetadata?.invalidationPrice);
+    const boundaryFailed = Number.isFinite(boundary) && (p.direction === "CALL"
+      ? Number(candle.close) <= boundary
+      : Number(candle.close) >= boundary);
+    const alignmentFailed = p.direction === "CALL"
+      ? analysis.trend === "BEARISH" || analysis.fiveMinuteConfirmation === "BEARISH"
+      : analysis.trend === "BULLISH" || analysis.fiveMinuteConfirmation === "BULLISH";
+    const opposite = (p.direction === "CALL" && analysis.signal === "PUT") ||
+      (p.direction === "PUT" && analysis.signal === "CALL");
+
+    if (boundaryFailed) {
+      return closePaperPosition("AgentB", candle, "Agent B fast invalidation: completed close failed the breakout/continuation boundary.", { analysis });
+    }
+    if (alignmentFailed) {
+      return closePaperPosition("AgentB", candle, "Agent B momentum alignment failed on completed candles.", { analysis });
+    }
+    if (opposite) {
+      return closePaperPosition("AgentB", candle, "Opposite Agent B momentum setup confirmed.", { analysis });
+    }
+    return;
+  }
+
+  if (analysis.signal === "CALL" || analysis.signal === "PUT") {
+    openPaperPosition("AgentB", analysis.signal, candle, analysis.reason, {
+      ...analysis,
+      invalidationPrice: analysis.invalidationPrice
+    });
+  }
 }
 
 function analyzeRiderPaper(candles2m, candles5m, candles15m) {
@@ -542,6 +890,98 @@ function runOliverPaperTrader(candles) {
       regime: analysis.regime
     });
   }
+}
+
+function runOliverLiveCompletedPaperTrader(candles) {
+  if (candles.length < 200) return;
+  const candle = candles[candles.length - 1];
+  if (!regularSessionForCandle(candle)) return;
+  const agent = paperStudy.agents.OliverLive;
+  const analysis = analyzeOliver(candles);
+
+  if (agent.position) {
+    updatePaperExcursion(agent.position, candle);
+    const p = agent.position;
+    const oppositeSetup = (p.direction === "CALL" && analysis.action === "PUT_SETUP") ||
+      (p.direction === "PUT" && analysis.action === "CALL_SETUP");
+    const regimeLost = (p.direction === "CALL" && analysis.regime !== "BULLISH_REGIME") ||
+      (p.direction === "PUT" && analysis.regime !== "BEARISH_REGIME");
+    agent.lastEvaluation = { time: candle.time, signal: `HOLD_${p.direction}`,
+      reason: "Live invalidation is monitored tick-by-tick; completed candles still confirm opposite setups and 200 SMA regime." };
+    if (oppositeSetup) return closePaperPosition("OliverLive", candle, "Opposite Oliver setup confirmed on a completed candle.", { analysis, execution: "COMPLETED_CANDLE" });
+    if (regimeLost) return closePaperPosition("OliverLive", candle, "Oliver 200 SMA regime authorization lost on a completed candle.", { analysis, execution: "COMPLETED_CANDLE" });
+    return;
+  }
+
+  if (agent.pendingSetup) {
+    recordPaperDecision("OliverLive", { time: candle.time, type: "SETUP_EXPIRED",
+      direction: agent.pendingSetup.direction, trigger: agent.pendingSetup.trigger,
+      reason: "Live trigger was not reached before the next 2-minute candle completed." });
+    agent.pendingSetup = null;
+  }
+
+  if (analysis.action === "CALL_SETUP" || analysis.action === "PUT_SETUP") {
+    const direction = analysis.action === "CALL_SETUP" ? "CALL" : "PUT";
+    agent.pendingSetup = {
+      direction, trigger: Number(analysis.trigger), invalidation: Number(analysis.invalidation),
+      setupCandleTime: candle.time, entryEvent: analysis.entryEvent, regime: analysis.regime, reason: analysis.reason
+    };
+    agent.lastEvaluation = { time: candle.time, signal: `ARMED_${direction}`,
+      reason: `Completed Oliver setup armed. Waiting for live price to reach ${Number(analysis.trigger).toFixed(4)}.` };
+    recordPaperDecision("OliverLive", { time: candle.time, type: "SETUP_ARMED", direction,
+      trigger: Number(analysis.trigger), invalidation: Number(analysis.invalidation), reason: analysis.reason });
+    savePaperStudy();
+  } else {
+    agent.lastEvaluation = { time: candle.time, signal: "WAIT", reason: analysis.reason || "No Oliver setup armed." };
+  }
+}
+
+function runOliverLiveTrigger(trade) {
+  const gate = livePaperExecutionGate(trade);
+  if (!gate.allow) return;
+  const agent = paperStudy.agents.OliverLive;
+  if (!agent) return;
+  const price = Number(trade.price);
+
+  if (agent.position) {
+    updateLivePaperExcursion(agent.position, price);
+    const invalidation = Number(agent.position.entryMetadata?.invalidation);
+    const invalidated = Number.isFinite(invalidation) && (agent.position.direction === "CALL"
+      ? price <= invalidation : price >= invalidation);
+    if (invalidated) {
+      return closePaperPositionAtLivePrice("OliverLive", trade, "Oliver live invalidation price reached.", {
+        trigger: agent.position.entryMetadata?.trigger, invalidation, execution: "LIVE_TRADE"
+      });
+    }
+    return;
+  }
+
+  const setup = agent.pendingSetup;
+  if (!setup) return;
+  if (studyDateKey(setup.setupCandleTime) !== studyDateKey(trade.time)) {
+    agent.pendingSetup = null;
+    savePaperStudy();
+    return;
+  }
+
+  const invalidBeforeEntry = setup.direction === "CALL" ? price <= Number(setup.invalidation) : price >= Number(setup.invalidation);
+  if (invalidBeforeEntry) {
+    recordPaperDecision("OliverLive", { time: trade.time, type: "SETUP_INVALIDATED", direction: setup.direction,
+      price, trigger: setup.trigger, invalidation: setup.invalidation,
+      reason: "Price reached the setup invalidation before reaching the live entry trigger." });
+    agent.lastEvaluation = { time: trade.time, signal: "WAIT", reason: "Armed Oliver setup invalidated before entry." };
+    agent.pendingSetup = null;
+    savePaperStudy();
+    return;
+  }
+
+  const triggered = setup.direction === "CALL" ? price >= Number(setup.trigger) : price <= Number(setup.trigger);
+  if (!triggered) return;
+  openPaperPositionAtLivePrice("OliverLive", setup.direction, trade,
+    `Oliver live trigger reached after completed setup: ${setup.reason}`, {
+      entryEvent: setup.entryEvent, trigger: setup.trigger, invalidation: setup.invalidation,
+      regime: setup.regime, setupCandleTime: setup.setupCandleTime, execution: "LIVE_TRADE"
+    });
 }
 
 function runAgentCPaperTrader(candles) {
@@ -711,7 +1151,7 @@ function runIndependentPaperStudy(candles) {
       console.log(`PAPER STUDY SKIP ${candle.time} — ${executionGate.reason}`);
       return;
     }
-    const runners = { Oliver: runOliverPaperTrader, AgentC: runAgentCPaperTrader,
+    const runners = { Oliver: runOliverPaperTrader, OliverLive: runOliverLiveCompletedPaperTrader, AgentB: runAgentBPaperTrader, AgentC: runAgentCPaperTrader,
       Rider: runRiderPaperTrader, AgentCChopLock: runAgentCChopLockPaperTrader };
     const pending = PAPER_AGENT_NAMES.filter(name => !paperStudy.agents[name].lastProcessedCandle ||
       Date.parse(candle.time) > Date.parse(paperStudy.agents[name].lastProcessedCandle));
@@ -766,6 +1206,7 @@ function paperDailySummary(dateKey = studyDateKey(new Date())) {
       trades: trades.length, favorable, unfavorable, flat,
       totalUnderlyingMove: Number(totalUnderlyingMove.toFixed(4)),
       openPosition: agent.position && studyDateKey(agent.position.entryTime) === dateKey ? agent.position : null,
+      pendingSetup: agent.pendingSetup && studyDateKey(agent.pendingSetup.setupCandleTime) === dateKey ? agent.pendingSetup : null,
       tradeLog: trades
     };
   };
@@ -775,6 +1216,8 @@ function paperDailySummary(dateKey = studyDateKey(new Date())) {
     timeframe: "2Min",
     note: "Results measure GOOGL underlying movement from paper entry to paper exit; they are not option-contract P/L.",
     Oliver: summarize("Oliver"),
+    OliverLive: summarize("OliverLive"),
+    AgentB: summarize("AgentB"),
     AgentC: summarize("AgentC"),
     Rider: summarize("Rider"),
     AgentCChopLock: summarize("AgentCChopLock"),
@@ -789,12 +1232,14 @@ function paperDailySummary(dateKey = studyDateKey(new Date())) {
     agentHealth: Object.fromEntries(PAPER_AGENT_NAMES.map(name => [name, {
       lastProcessedCandle: paperStudy.agents[name].lastProcessedCandle,
       lastEvaluation: paperStudy.agents[name].lastEvaluation,
-      activePosition: paperStudy.agents[name].position
+      activePosition: paperStudy.agents[name].position,
+      pendingSetup: paperStudy.agents[name].pendingSetup || null
     }]))
   };
 }
 
 loadPaperStudy();
+loadAnalysisTimingAudit();
 setInterval(closePaperPositionsAtSessionEnd, 60 * 1000);
 
 // Trend Hold is an observational state, never an order or position tracker.
@@ -899,7 +1344,7 @@ function normalizeBar(bar) {
 // ADD COMPLETED CANDLE
 // ==================================================
 
-function addCompletedCandle(candle) {
+function addCompletedCandle(candle, timing = null, rollover = null) {
 
   if (!candle || !candle.time) {
     return;
@@ -962,7 +1407,10 @@ function addCompletedCandle(candle) {
       );
 
   }
-// Run Trend Battle analysis whenever a new 2-minute candle completes
+// Run Trend Battle analysis whenever a new 2-minute candle completes.
+// Timing is captured around the existing local calculations only.
+const finalizedAt = new Date().toISOString();
+const analysisStartedAt = new Date().toISOString();
 const trendAnalysis = analyzeTrendBattle(completedCandles);
 
 if (trendAnalysis) {
@@ -970,9 +1418,11 @@ if (trendAnalysis) {
   recordTrendEvent(trendAnalysis);
 }
 
-// Feed the same completed candle to both independent paper traders.
+// Feed the same completed candle to the independent paper traders.
 // This performs local calculations only and does not make another Alpaca request.
 runIndependentPaperStudy(completedCandles);
+const analysisFinishedAt = new Date().toISOString();
+recordCompletedCandleTiming({candle:normalized,timing,rollover,finalizedAt,analysisStartedAt,analysisFinishedAt,trendAnalysis});
 }
 
 
@@ -1266,7 +1716,7 @@ function updateDevelopingRiderCandles(trade) {
   }
 }
 
-function updateDevelopingCandle(trade) {
+function updateDevelopingCandle(trade, receivedAt = new Date().toISOString()) {
 
   const price =
     Number(trade.price);
@@ -1325,7 +1775,9 @@ function updateDevelopingCandle(trade) {
     if (developingCandle) {
 
       addCompletedCandle(
-        developingCandle
+        developingCandle,
+        developingCandleTiming,
+        { sourceTime:trade.time, receivedAt }
       );
 
 
@@ -1353,6 +1805,10 @@ function updateDevelopingCandle(trade) {
 
       volume: size
 
+    };
+    developingCandleTiming = {
+      firstTradeSourceTime:trade.time, firstTradeReceivedAt:receivedAt,
+      lastTradeSourceTime:trade.time, lastTradeReceivedAt:receivedAt, tradeCount:1
     };
 
 
@@ -1384,6 +1840,12 @@ function updateDevelopingCandle(trade) {
 
   developingCandle.volume +=
     size;
+  if (!developingCandleTiming) {
+    developingCandleTiming = {firstTradeSourceTime:trade.time,firstTradeReceivedAt:receivedAt,tradeCount:0};
+  }
+  developingCandleTiming.lastTradeSourceTime = trade.time;
+  developingCandleTiming.lastTradeReceivedAt = receivedAt;
+  developingCandleTiming.tradeCount = Number(developingCandleTiming.tradeCount || 0) + 1;
 
 }
 
@@ -1701,6 +2163,7 @@ function connectAlpacaStream() {
           message.S === "GOOGL"
         ) {
 
+          const serverReceivedAt = new Date().toISOString();
           latestGOOGLTrade = {
 
             price:
@@ -1721,8 +2184,12 @@ function connectAlpacaStream() {
 
           updateDevelopingRiderCandles(latestGOOGLTrade);
           updateDevelopingCandle(
-            latestGOOGLTrade
+            latestGOOGLTrade,
+            serverReceivedAt
           );
+          // Oliver Live Trigger reuses this same GOOGL trade stream.
+          // It does not open another WebSocket or make another Alpaca market-data request.
+          runOliverLiveTrigger(latestGOOGLTrade);
 
         }
 
@@ -5028,8 +5495,10 @@ app.get(
 
     res.set("Cache-Control", "no-store");
     if (req.query.dashboard === "1") {
+      const dashboard = buildDashboardView();
+      if (dashboard.candleTime) markAnalysisTimingDashboardServed(dashboard.candleTime, dashboard);
       return res.json({ latestTrade: latestGOOGLTrade, developing2MinCandle: developingCandle,
-        streamStatus: alpacaStreamStatus, dashboard: buildDashboardView() });
+        streamStatus: alpacaStreamStatus, dashboard });
     }
 
     res.json({
@@ -5663,7 +6132,7 @@ function buildDashboardView(now = Date.now()) {
     hasClose ? { price:lastClose, source:"CANDLE", time:new Date(Date.parse(candleTime)+120000).toISOString() } :
     { price:null, source:"UNAVAILABLE", time:null };
   return {
-    priceDisplay, version:"3.2.13", regularHours:session.regularHours, session:session.session, fresh,
+    priceDisplay, version:"3.2.18", regularHours:session.regularHours, session:session.session, fresh,
     candleTime, quoteTime:latestGOOGLTrade?.time || null, direction, entrySignal:c.analysis.signal,
     pulseDirection, chopState:chop.state, chopActive, warningPending, strength:c.strength,
     candleControl: c.strength.doji ? "NEUTRAL" : c.strength.color === "GREEN" ? "BULLS" : c.strength.color === "RED" ? "BEARS" : "NEUTRAL",
@@ -6934,7 +7403,7 @@ body.trade-active .pressureSupport { display:none; }
   </div>
 
   <div class="warning" id="warningSummary">${view.warning}</div>
-  <div class="dataStatus" id="dataStatus">V3.2.15 TEST · Waiting for a fresh price</div>
+  <div class="dataStatus" id="dataStatus">V3.2.18 TEST · Waiting for a fresh price</div>
   <a class="researchAccess" href="/research" title="Paper-trading research only">Research<span>Paper trades • For testing only</span></a>
 
 </div>
@@ -7046,7 +7515,7 @@ function renderMarket() {
     display.source === "TRADE" ? (fresh && view.regularHours ? "Live trade price" : "Last received trade price") : "Price unavailable";
   setText("liveHeaderPrice", "GOOGL " + (Number.isFinite(display.price) && display.price > 0 ? dollars(display.price) : "—"));
   setText("priceSource", sourceLabel);
-  setText("dataStatus", "V3.2.15 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
+  setText("dataStatus", "V3.2.18 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
     (view.candleTime ? " · Confirmed candle ended " + timeText(new Date(Date.parse(view.candleTime) + 120000).toISOString()) : ""));
   setText("controlHeadline", view.candleControl === "BULLS" ? "BUYERS LEAD THE LAST COMPLETED CANDLE" :
     view.candleControl === "BEARS" ? "SELLERS LEAD THE LAST COMPLETED CANDLE" : "LAST COMPLETED CANDLE SHOWS INDECISION");
@@ -7199,6 +7668,17 @@ endButton.addEventListener("click", () => {
   }
   catch (_) { setText("entryTrackerState", "Could not clear the saved entry. Please try again."); }
 });
+function reportAnalysisTimingRender(candleTime) {
+  if (!candleTime) return;
+  const key = "bvbTimingReportedCandle";
+  try { if (sessionStorage.getItem(key) === candleTime) return; sessionStorage.setItem(key, candleTime); } catch (_) {}
+  const payload = JSON.stringify({candleTime,clientRenderedAt:new Date().toISOString()});
+  try {
+    if (navigator.sendBeacon) { navigator.sendBeacon("/analysis-timing/render", new Blob([payload], {type:"application/json"})); return; }
+    fetch("/analysis-timing/render", {method:"POST",headers:{"content-type":"application/json"},body:payload,keepalive:true}).catch(()=>{});
+  } catch (_) {}
+}
+
 async function syncLivePriceDisplay() {
   renderAll(); // Expire stale cues even while a request is pending.
   if (requestInFlight) return;
@@ -7219,7 +7699,10 @@ async function syncLivePriceDisplay() {
       refreshCandleClock();
     }
   } catch (_) { requestHealthy = false; }
-  finally { clearTimeout(timeout); requestInFlight = false; renderAll(); }
+  finally {
+    clearTimeout(timeout); requestInFlight = false; renderAll();
+    if (requestHealthy && view?.candleTime) reportAnalysisTimingRender(view.candleTime);
+  }
 }
 renderAll();
 syncLivePriceDisplay();
@@ -7241,6 +7724,14 @@ setTimeout(() => window.location.reload(), 10000);
 );
 
 
+
+app.post("/analysis-timing/render", (req, res) => {
+  const candleTime = String(req.body?.candleTime || "");
+  const clientRenderedAt = String(req.body?.clientRenderedAt || "");
+  if (!Number.isFinite(Date.parse(candleTime))) return res.status(400).json({error:"Invalid candle time"});
+  markAnalysisTimingClientRender(candleTime, clientRenderedAt);
+  res.json({ok:true});
+});
 
 function paperAvailableDates() {
   const dates = new Set([studyDateKey(new Date())]);
@@ -7273,6 +7764,16 @@ function formatPaperTime(time) {
   return new Intl.DateTimeFormat("en-US", {
     timeZone: "America/Chicago", hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true
   }).format(new Date(time)) + " CT";
+}
+
+function formatTimingMs(value) {
+  return Number.isFinite(Number(value)) ? `${Math.round(Number(value))} ms` : "—";
+}
+
+function analysisTimingPersistenceStatus() {
+  return {file:ANALYSIS_TIMING_FILE,deploySafe:ANALYSIS_TIMING_DEPLOY_SAFE,message:ANALYSIS_TIMING_DEPLOY_SAFE
+    ? "Persistent timing-audit path detected."
+    : "Local instance timing audit only. Mount /var/data or set ANALYSIS_TIMING_FILE to retain audit history across redeploys."};
 }
 
 app.get("/research-login", (req, res) => {
@@ -7312,7 +7813,8 @@ app.get("/research", authorizeResearchPage, (req, res) => {
   const persistence = researchPersistenceStatus();
   const rows = PAPER_AGENT_NAMES.map(name => {
     const a = summary[name];
-    const open = a.openPosition ? `${a.openPosition.direction} @ $${Number(a.openPosition.entryPrice).toFixed(2)}` : "FLAT";
+    const open = a.openPosition ? `${a.openPosition.direction} @ $${Number(a.openPosition.entryPrice).toFixed(2)}` :
+      a.pendingSetup ? `ARMED ${a.pendingSetup.direction} @ $${Number(a.pendingSetup.trigger).toFixed(2)}` : "FLAT";
     return `<tr><td>${escapeHtml(name)}</td><td>${a.trades}</td><td>${a.favorable}</td><td>${a.unfavorable}</td><td>${a.flat}</td><td>${a.totalUnderlyingMove >= 0 ? "+" : ""}$${Number(a.totalUnderlyingMove).toFixed(3)}</td><td>${escapeHtml(open)}</td></tr>`;
   }).join("");
   const tradeRows = PAPER_AGENT_NAMES.flatMap(name => (summary[name].tradeLog || []).map(t => ({...t, agent:name})))
@@ -7327,12 +7829,47 @@ app.get("/research", authorizeResearchPage, (req, res) => {
     table{width:100%;border-collapse:collapse;background:#0e141d;border:1px solid #283342;border-radius:10px;overflow:hidden;margin-bottom:18px}th,td{padding:8px;border-bottom:1px solid #202a37;text-align:left;font-size:12px}th{color:#aeb9c8;background:#121a25}.pos{color:#73d99a}.neg{color:#ff7b86}.note{color:#8f9bad;font-size:11px;margin:8px 0 18px}.scroll{overflow-x:auto}
     @media(max-width:700px){body{padding:10px}th,td{padding:6px;font-size:11px}}
   </style></head><body><div class="wrap"><h1>Research</h1><div class="sub">Paper trades • For testing only — not your trades and no brokerage orders</div>
-  <div class="bar"><form method="get"><select name="date" onchange="this.form.submit()">${options}</select></form><a class="btn" href="/paper-study/export.csv?date=${encodeURIComponent(dateKey)}">Export CSV</a><a class="btn" href="/oliver-dashboard">Back to dashboard</a><a class="btn" href="/research-logout">Sign out</a></div>
+  <div class="bar"><form method="get"><select name="date" onchange="this.form.submit()">${options}</select></form><a class="btn" href="/paper-study/export.csv?date=${encodeURIComponent(dateKey)}">Export CSV</a><a class="btn" href="/research/timing?date=${encodeURIComponent(dateKey)}">Analysis Timing</a><a class="btn" href="/oliver-dashboard">Back to dashboard</a><a class="btn" href="/research-logout">Sign out</a></div>
   <div class="notice"><b>Journal:</b> ${escapeHtml(persistence.message)}<br><span>${escapeHtml(persistence.file)}</span></div>
   <h2>Daily summary — ${escapeHtml(dateKey)}</h2><div class="scroll"><table><thead><tr><th>Agent</th><th>Trades</th><th>Wins</th><th>Losses</th><th>Flat</th><th>Net GOOGL move</th><th>Open position</th></tr></thead><tbody>${rows}</tbody></table></div>
   <div class="note">Underlying GOOGL movement only; not option P/L and before costs. Open positions are shown only for the selected date.</div>
   <h2>Closed trades</h2><div class="scroll"><table><thead><tr><th>Agent</th><th>Side</th><th>Entry</th><th>Entry price</th><th>Exit</th><th>Exit price</th><th>Move</th><th>Exit reason</th></tr></thead><tbody>${tradeRows || '<tr><td colspan="8">No closed trades recorded for this date.</td></tr>'}</tbody></table></div>
   </div></body></html>`);
+});
+
+app.get("/research/timing", authorizeResearchPage, (req, res) => {
+  const requested = String(req.query.date || "").trim();
+  const dateKey = /^\d{4}-\d{2}-\d{2}$/.test(requested) ? requested : studyDateKey(new Date());
+  const records = analysisTimingRecordsForDate(dateKey).slice(-100).reverse();
+  const persistence = analysisTimingPersistenceStatus();
+  const rows = records.map(r => {
+    const state = r.dashboardState || {};
+    return `<tr><td>${escapeHtml(formatPaperTime(r.candleEnd))}</td><td>$${Number(r.open).toFixed(2)} / $${Number(r.high).toFixed(2)} / $${Number(r.low).toFixed(2)} / $${Number(r.close).toFixed(2)}</td><td>${formatTimingMs(r.sourceToServerLastTradeMs)}</td><td>${formatTimingMs(r.firstTradeAfterBoundaryMs)}</td><td>${formatTimingMs(r.candleFinalizeDelayMs)}</td><td>${formatTimingMs(r.analysisDurationMs)}</td><td>${formatTimingMs(r.dashboardAfterAnalysisMs)}</td><td>${formatTimingMs(r.screenAfterAnalysisMs)}</td><td>${escapeHtml(state.direction || r.battle?.control || "—")}</td><td>${escapeHtml(state.chopState || "—")}</td><td>${escapeHtml(state.actionTitle || r.battle?.action || "—")}</td></tr>`;
+  }).join("");
+  const options = [...new Set([dateKey, ...analysisTimingAudit.records.map(r => studyDateKey(r.candleTime)).filter(Boolean)])].sort().reverse()
+    .map(d => `<option value="${d}"${d===dateKey?" selected":""}>${d}</option>`).join("");
+  res.type("html").send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>BVB Analysis Timing</title><style>
+    body{font-family:system-ui,-apple-system,sans-serif;background:#080c12;color:#e9eef5;margin:0;padding:18px}.wrap{max-width:1250px;margin:auto}h1{font-size:24px;margin:0 0 2px}.sub,.note{color:#9eabbc;font-size:12px}.bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:14px 0}select,a.btn{background:#121923;color:#e9eef5;border:1px solid #344152;border-radius:8px;padding:8px 10px;text-decoration:none;font-size:13px}.notice{border:1px solid ${persistence.deploySafe?"#315c48":"#7a5b25"};background:${persistence.deploySafe?"#10241c":"#2a2111"};padding:10px;border-radius:9px;font-size:12px;margin:10px 0 16px}.scroll{overflow-x:auto}table{width:100%;border-collapse:collapse;background:#0e141d;border:1px solid #283342}th,td{padding:7px;border-bottom:1px solid #202a37;text-align:left;font-size:11px;white-space:nowrap}th{color:#aeb9c8;background:#121a25}@media(max-width:700px){body{padding:10px}th,td{padding:6px;font-size:10px}}</style></head><body><div class="wrap"><h1>Analysis Timing</h1><div class="sub">GOOGL 2-minute audit • existing Alpaca stream only • no extra market-data connection or polling</div><div class="bar"><form method="get"><select name="date" onchange="this.form.submit()">${options}</select></form><a class="btn" href="/analysis-timing/export.csv?date=${encodeURIComponent(dateKey)}">Export Timing CSV</a><a class="btn" href="/research?date=${encodeURIComponent(dateKey)}">Paper Results</a><a class="btn" href="/oliver-dashboard">Dashboard</a></div><div class="notice"><b>Timing journal:</b> ${escapeHtml(persistence.message)}<br>${escapeHtml(persistence.file)}</div><div class="note">Source→server compares Alpaca trade timestamps with server receipt time. First trade after boundary shows how long the market stream waited for the next GOOGL trade; finalize delay shows the total time until the app finalized the prior candle. Screen delay is measured on the server when the iPad/browser reports its first render for that candle. Historical seed bars are excluded.</div><div class="scroll"><table><thead><tr><th>Candle ended</th><th>O / H / L / C</th><th>Source→server</th><th>First trade after boundary</th><th>Finalize delay</th><th>Analysis</th><th>API after analysis</th><th>Screen after analysis</th><th>Direction</th><th>Chop</th><th>Action</th></tr></thead><tbody>${rows || '<tr><td colspan="11">No live timing records for this date yet.</td></tr>'}</tbody></table></div></div></body></html>`);
+});
+
+app.get("/analysis-timing/export.csv", authorizeBVBEvents, (req, res) => {
+  const requested = String(req.query.date || "").trim();
+  const dateKey = /^\d{4}-\d{2}-\d{2}$/.test(requested) ? requested : studyDateKey(new Date());
+  const records = analysisTimingRecordsForDate(dateKey);
+  const q = value => `"${String(value ?? "").replace(/"/g, '""')}"`;
+  const lines = [["date","candle_start","candle_end","open","high","low","close","trade_count","last_trade_source","last_trade_server_received","source_to_server_ms","rollover_trade_source","rollover_trade_server_received","first_trade_after_boundary_ms","rollover_source_to_server_ms","finalized_at","candle_finalize_delay_ms","analysis_started_at","analysis_finished_at","analysis_duration_ms","first_dashboard_served_at","dashboard_after_analysis_ms","first_client_render_server_received_at","client_reported_rendered_at","screen_after_analysis_ms","direction","candle_control","chop_state","action","risk_stage","entry_signal"]];
+  for (const r of records) {
+    const d = r.dashboardState || {};
+    lines.push([dateKey,r.candleTime,r.candleEnd,r.open,r.high,r.low,r.close,r.tradeCount,r.lastTradeSourceTime,r.lastTradeReceivedAt,r.sourceToServerLastTradeMs,r.rolloverTradeSourceTime,r.rolloverTradeReceivedAt,r.firstTradeAfterBoundaryMs,r.rolloverSourceToServerMs,r.finalizedAt,r.candleFinalizeDelayMs,r.analysisStartedAt,r.analysisFinishedAt,r.analysisDurationMs,r.firstDashboardServedAt,r.dashboardAfterAnalysisMs,r.firstClientRenderReceivedAt,r.clientReportedRenderedAt,r.screenAfterAnalysisMs,d.direction,d.candleControl,d.chopState,d.actionTitle,d.riskStage,d.entrySignal]);
+  }
+  res.set("content-disposition", `attachment; filename="bvb-analysis-timing-${dateKey}.csv"`);
+  res.type("text/csv").send(lines.map(row => row.map(q).join(",")).join("\n"));
+});
+
+app.get("/analysis-timing", authorizeBVBEvents, (req, res) => {
+  const requested = String(req.query.date || "").trim();
+  const dateKey = /^\d{4}-\d{2}-\d{2}$/.test(requested) ? requested : studyDateKey(new Date());
+  res.json({version:analysisTimingAudit.version,symbol:"GOOGL",timeframe:"2Min",date:dateKey,persistence:analysisTimingPersistenceStatus(),records:analysisTimingRecordsForDate(dateKey)});
 });
 
 app.get("/paper-study/export.csv", authorizeBVBEvents, (req, res) => {
@@ -7359,6 +7896,8 @@ app.get("/paper-study", authorizeBVBEvents, (req, res) => {
     symbol: paperStudy.symbol,
     timeframe: paperStudy.timeframe,
     strategyNotes: {
+      OliverLive: "Paper-only Oliver variant: completed 2-minute candles establish State/Location/Event and arm exact trigger/invalidation prices; the existing GOOGL live trade stream executes trigger and invalidation crossings without another Alpaca connection. Opposite setups and 200 SMA regime loss remain completed-candle confirmations.",
+      AgentB: "Momentum Trader paper study: 2-minute structure, 5-minute confirmation, 8/20/200 alignment, accomplished breakout/continuation, named momentum events, support/resistance, no chasing, and fast invalidation. Uncertainty defaults to WAIT.",
       AgentC: "Unchanged Agent C v1 baseline; existing history preserved.",
       AgentCChopLock: "Paper-only C variant: caution/chop blocks new entries and immediate reversals; strong breakout or confirmed follow-through unlocks. Existing C exits preserved.",
       Rider: "Separate experimental paper study: 15-minute bias/context, 5-minute trend/location, and 2-minute pullback confirmation. Higher timeframes are seeded once from Alpaca and then aggregated from the existing live GOOGL trade stream.",
@@ -7367,6 +7906,7 @@ app.get("/paper-study", authorizeBVBEvents, (req, res) => {
     updatedAt: paperStudy.updatedAt,
     persistenceFile: PAPER_JOURNAL_FILE,
     persistence: researchPersistenceStatus(),
+    analysisTiming: { persistence: analysisTimingPersistenceStatus(), records: analysisTimingAudit.records.length },
     availableDates: paperAvailableDates(),
     cChopExperiment: paperStudy.cChopExperiment || { status: "PENDING_FLAT_START" },
     agents: paperStudy.agents
