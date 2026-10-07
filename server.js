@@ -6227,7 +6227,7 @@ function buildDashboardView(now = Date.now()) {
     hasClose ? { price:lastClose, source:"CANDLE", time:new Date(Date.parse(candleTime)+120000).toISOString() } :
     { price:null, source:"UNAVAILABLE", time:null };
   return {
-    priceDisplay, version:"3.2.21", regularHours:session.regularHours, session:session.session, fresh,
+    priceDisplay, version:"3.2.22", regularHours:session.regularHours, session:session.session, fresh,
     candleTime, quoteTime:latestGOOGLTrade?.time || null, direction, entrySignal:c.analysis.signal,
     pulseDirection, chopState:chop.state, chopActive, warningPending, strength:c.strength,
     candleControl: c.strength.doji ? "NEUTRAL" : c.strength.color === "GREEN" ? "BULLS" : c.strength.color === "RED" ? "BEARS" : "NEUTRAL",
@@ -7498,7 +7498,7 @@ body.trade-active .pressureSupport { display:none; }
   </div>
 
   <div class="warning" id="warningSummary">${view.warning}</div>
-  <div class="dataStatus" id="dataStatus">V3.2.21 TEST · Waiting for a fresh price</div>
+  <div class="dataStatus" id="dataStatus">V3.2.22 TEST · Waiting for a fresh price</div>
   <a class="researchAccess" href="/research" title="Paper-trading research only">Research<span>Paper trades • For testing only</span></a>
 
 </div>
@@ -7610,7 +7610,7 @@ function renderMarket() {
     display.source === "TRADE" ? (fresh && view.regularHours ? "Live trade price" : "Last received trade price") : "Price unavailable";
   setText("liveHeaderPrice", "GOOGL " + (Number.isFinite(display.price) && display.price > 0 ? dollars(display.price) : "—"));
   setText("priceSource", sourceLabel);
-  setText("dataStatus", "V3.2.21 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
+  setText("dataStatus", "V3.2.22 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
     (view.candleTime ? " · Confirmed candle ended " + timeText(new Date(Date.parse(view.candleTime) + 120000).toISOString()) : ""));
   setText("controlHeadline", view.candleControl === "BULLS" ? "BUYERS LEAD THE LAST COMPLETED CANDLE" :
     view.candleControl === "BEARS" ? "SELLERS LEAD THE LAST COMPLETED CANDLE" : "LAST COMPLETED CANDLE SHOWS INDECISION");
@@ -7648,33 +7648,56 @@ function renderMarket() {
   }
 }
 function positionGuidance(move, best, giveback) {
-  // Presentation only: branch order and risk thresholds match V3.2.10.
+  // Presentation only. Ordinary pullbacks remain HOLD until reversal evidence develops.
   const message = (level, title, detail) => ({level, title, detail});
   if (!view.regularHours) return message("CLOSED", "MARKET CLOSED — Trade marked", "Entry and best move are saved. Live guidance resumes during regular hours.");
   if (!freshNow()) return message("STALE", "CHECK YOUR TRADE — Data not current", "Live guidance is unavailable. Check your broker and exit plan; your marker remains saved.");
+
   const same = view.direction === trackedEntry.direction;
   const oppositeConfirmed = view.direction !== "WAIT" && !same;
   const oppositeCandle = view.candleControl === (trackedEntry.direction === "CALL" ? "BEARS" : "BULLS");
-  const evidence = [oppositeCandle, view.riskStage === "WARNING" || view.riskStage === "REGIME_BROKEN",
-    oppositeConfirmed, view.changeWatch === "WARNING", oppositeConfirmed && view.entrySignal === view.direction].filter(Boolean).length;
-  const ratio = best > 0 ? giveback/best : 0;
+  const evidence = [
+    oppositeCandle,
+    view.riskStage === "WARNING" || view.riskStage === "REGIME_BROKEN",
+    oppositeConfirmed,
+    view.changeWatch === "WARNING",
+    oppositeConfirmed && view.entrySignal === view.direction
+  ].filter(Boolean).length;
+  const ratio = best > 0 ? giveback / best : 0;
   const lastDirection = view.direction === "CALL" ? "bullish" : view.direction === "PUT" ? "bearish" : "unconfirmed";
   const priceFact = best > 0 && move <= 0 ? "All tracked gains given back; price is " + (move < 0 ? "against" : "at") + " your entry. " :
     move < 0 ? "Price is against your entry. " : giveback > 0 ? "Price is pulling back from your best tracked price. " : "";
   const context = "Last confirmed direction: " + lastDirection + ".";
-  if (oppositeConfirmed || view.riskStage === "REGIME_BROKEN" || (best >= 0.10 && ratio >= 0.90 && evidence >= 2))
-    return message("EXIT", "EXIT WARNING — Review your exit plan", priceFact + (oppositeConfirmed ?
-      "CONFIRMED WARNING: Completed candles now confirm direction against your trade." : view.riskStage === "REGIME_BROKEN" ?
-      "CONFIRMED WARNING: The trend-support check has broken down. " + context :
-      "LIVE + CANDLE WARNING: Giveback and completed-candle risk evidence meet the existing exit-warning rule. " + context));
-  if (best >= 0.10 && ratio >= 0.75 && evidence >= 2) return message("REVERSAL", "CAUTION — Reversal risk", priceFact + "LIVE + CANDLE WARNING: Large giveback with opposing risk evidence. Review your exit plan. " + context);
-  if (best >= 0.10 && ratio >= 0.55 && evidence >= 1) return message("PULLBACK", move <= 0 ? "CAUTION — All tracked gains given back" : "CAUTION — Gains pulling back", priceFact + "LIVE + CANDLE WARNING: Giveback with candle-based risk evidence. Review your exit plan. " + context);
-  if (evidence >= 2 || (best >= 0.10 && ratio >= 0.35) || view.hold.stage === "WARNING")
-    return message("WEAK", "CAUTION — Review your trade", priceFact + (evidence >= 2 || view.hold.stage === "WARNING" ?
-      "CANDLE WARNING: Support is weakening or facing opposition. " : "LIVE WARNING: The giveback threshold has been reached; this alone does not confirm a reversal. ") + "Review your exit plan. " + context);
-  if (move < 0) return message("AGAINST", "CAUTION — Price against your entry", priceFact + "LIVE WARNING: Review your exit plan. " + context);
-  if (same) return message("HOLD", "HOLD — Confirmed direction supports your trade", priceFact + "COMPLETED-CANDLE BASIS: No existing exit-warning condition is met. Keep your exit plan in place.");
-  return message("TRACKING", "WATCH — Direction not confirmed", priceFact + "Wait for clearer completed-candle evidence; keep your exit plan in place.");
+
+  // Strong/confirmed reversal evidence: recommend an exit review for an active marked position.
+  if (oppositeConfirmed || view.riskStage === "REGIME_BROKEN" || (best >= 0.10 && ratio >= 0.90 && evidence >= 2)) {
+    const reason = oppositeConfirmed ?
+      "Completed candles now confirm direction against your trade." : view.riskStage === "REGIME_BROKEN" ?
+      "The trend-support check has broken down." :
+      "Giveback plus completed-candle reversal evidence meet the exit-warning rule.";
+    return message("EXIT", "EXIT WARNING — Consider exiting your position",
+      priceFact + "CONFIRMED WARNING: " + reason + " If you still hold this position in your broker, consider exiting according to your plan. End Tracking does not close a brokerage trade.");
+  }
+
+  // Developing reversal evidence: warn of the possibility, but do not describe an ordinary pullback as a reversal.
+  if (view.riskStage === "WARNING" || view.changeWatch === "WARNING" || evidence >= 2 || (best >= 0.10 && ratio >= 0.75 && evidence >= 1)) {
+    return message("REVERSAL", "CAUTION — Reversal may be forming",
+      priceFact + "Opposing price/candle evidence is building, but a reversal is not yet confirmed. Review and protect your exit plan. " + context);
+  }
+
+  // Same confirmed direction with no meaningful reversal evidence = normal pullback.
+  if (same) {
+    const pullingBack = giveback > 0 || move < 0 || oppositeCandle || view.changeWatch === "WATCH" || view.hold.stage === "WARNING";
+    if (pullingBack) {
+      return message("PULLBACK", "HOLD — Normal pullback",
+        priceFact + "The confirmed trend still supports your trade and no reversal is confirmed. Continue monitoring and follow your normal exit plan. " + context);
+    }
+    return message("HOLD", "HOLD — Trend intact",
+      "Confirmed direction still supports your trade. No reversal warning condition is present. Keep your normal exit plan in place.");
+  }
+
+  return message("TRACKING", "WATCH — Direction not confirmed",
+    priceFact + "Wait for clearer completed-candle evidence; keep your exit plan in place.");
 }
 function renderTracker() {
   const active = !!trackedEntry;
