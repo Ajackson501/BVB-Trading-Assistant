@@ -222,7 +222,7 @@ let analysisTimingAudit = {
 };
 let developingCandleTiming = null;
 
-const PAPER_STUDY_VERSION = "Oliver-v1.2_vs_OliverLive-v2_vs_AgentB-v1_vs_AgentC-v1_vs_AgentCChopLock-v1_vs_Rider-v1_15MBiasTag-v1";
+const PAPER_STUDY_VERSION = "Oliver-v1.2_vs_OliverLive-v3_vs_AgentB-v1_vs_AgentC-v1_vs_AgentCChopLock-v1_vs_Rider-v1_15MBiasTag-v1";
 const PAPER_AGENT_NAMES = ["Oliver", "OliverLive", "AgentB", "AgentC", "Rider", "AgentCChopLock"];
 // Experimental settings, not optimized or established profitable rules.
 const C_CHOP_TEST = Object.freeze({ version: "C-ChopLock-v1", rangeBars: 8,
@@ -1059,6 +1059,26 @@ function runOliverLiveCompletedPaperTrader(candles) {
   }
 }
 
+function oliverLiveEntryCandleStop(direction, trade) {
+  if (!developingCandle || !trade?.time) return null;
+  const tradeTime = new Date(trade.time);
+  if (Number.isNaN(tradeTime.getTime())) return null;
+  const bucket = new Date(tradeTime);
+  bucket.setUTCSeconds(0, 0);
+  bucket.setUTCMinutes(Math.floor(bucket.getUTCMinutes() / 2) * 2);
+  if (developingCandle.time !== bucket.toISOString()) return null;
+  const stop = direction === "CALL" ? Number(developingCandle.low) : Number(developingCandle.high);
+  if (!Number.isFinite(stop)) return null;
+  return {
+    price: stop,
+    candleTime: developingCandle.time,
+    open: Number(developingCandle.open),
+    high: Number(developingCandle.high),
+    low: Number(developingCandle.low),
+    close: Number(developingCandle.close)
+  };
+}
+
 function runOliverLiveTrigger(trade) {
   const gate = livePaperExecutionGate(trade);
   if (!gate.allow) return;
@@ -1100,13 +1120,39 @@ function runOliverLiveTrigger(trade) {
 
   const triggered = setup.direction === "CALL" ? price >= Number(setup.trigger) : price <= Number(setup.trigger);
   if (!triggered) return;
+
+  let entryInvalidation = Number(setup.invalidation);
+  let entryCandleSnapshot = null;
+  if (setup.source === "LIVE_20_SMA_PULLBACK") {
+    entryCandleSnapshot = oliverLiveEntryCandleStop(setup.direction, trade);
+    if (!entryCandleSnapshot || !Number.isFinite(Number(entryCandleSnapshot.price))) {
+      recordPaperDecision("OliverLive", { time: trade.time, type: "ENTRY_BLOCKED", direction: setup.direction,
+        price, trigger: setup.trigger,
+        reason: "Live 20-SMA trigger crossed, but the developing entry candle was unavailable for the required fixed stop." });
+      return;
+    }
+    entryInvalidation = Number(entryCandleSnapshot.price);
+  }
+
   openPaperPositionAtLivePrice("OliverLive", setup.direction, trade,
     setup.source === "LIVE_20_SMA_PULLBACK"
       ? `Oliver Live 20-SMA break triggered: ${setup.reason}`
       : `Oliver live trigger reached after completed setup: ${setup.reason}`, {
-      entryEvent: setup.entryEvent, trigger: setup.trigger, invalidation: setup.invalidation,
-      regime: setup.regime, setupCandleTime: setup.setupCandleTime,
-      setupSource: setup.source || "UNKNOWN", execution: "LIVE_TRADE"
+      entryEvent: setup.entryEvent,
+      trigger: setup.trigger,
+      invalidation: entryInvalidation,
+      setupInvalidation: Number(setup.invalidation),
+      regime: setup.regime,
+      setupCandleTime: setup.setupCandleTime,
+      entryCandleTime: entryCandleSnapshot?.candleTime || null,
+      entryCandleOpen: entryCandleSnapshot?.open ?? null,
+      entryCandleHigh: entryCandleSnapshot?.high ?? null,
+      entryCandleLow: entryCandleSnapshot?.low ?? null,
+      entryCandleCloseAtTrigger: entryCandleSnapshot?.close ?? null,
+      stopSource: setup.source === "LIVE_20_SMA_PULLBACK" ? "ENTRY_CANDLE_AT_TRIGGER" : "SETUP_INVALIDATION",
+      stopFrozenAt: setup.source === "LIVE_20_SMA_PULLBACK" ? trade.time : null,
+      setupSource: setup.source || "UNKNOWN",
+      execution: "LIVE_TRADE"
     });
 }
 
@@ -6227,7 +6273,7 @@ function buildDashboardView(now = Date.now()) {
     hasClose ? { price:lastClose, source:"CANDLE", time:new Date(Date.parse(candleTime)+120000).toISOString() } :
     { price:null, source:"UNAVAILABLE", time:null };
   return {
-    priceDisplay, version:"3.2.22", regularHours:session.regularHours, session:session.session, fresh,
+    priceDisplay, version:"3.2.23", regularHours:session.regularHours, session:session.session, fresh,
     candleTime, quoteTime:latestGOOGLTrade?.time || null, direction, entrySignal:c.analysis.signal,
     pulseDirection, chopState:chop.state, chopActive, warningPending, strength:c.strength,
     candleControl: c.strength.doji ? "NEUTRAL" : c.strength.color === "GREEN" ? "BULLS" : c.strength.color === "RED" ? "BEARS" : "NEUTRAL",
@@ -7498,7 +7544,7 @@ body.trade-active .pressureSupport { display:none; }
   </div>
 
   <div class="warning" id="warningSummary">${view.warning}</div>
-  <div class="dataStatus" id="dataStatus">V3.2.22 TEST · Waiting for a fresh price</div>
+  <div class="dataStatus" id="dataStatus">V3.2.23 TEST · Waiting for a fresh price</div>
   <a class="researchAccess" href="/research" title="Paper-trading research only">Research<span>Paper trades • For testing only</span></a>
 
 </div>
@@ -7610,7 +7656,7 @@ function renderMarket() {
     display.source === "TRADE" ? (fresh && view.regularHours ? "Live trade price" : "Last received trade price") : "Price unavailable";
   setText("liveHeaderPrice", "GOOGL " + (Number.isFinite(display.price) && display.price > 0 ? dollars(display.price) : "—"));
   setText("priceSource", sourceLabel);
-  setText("dataStatus", "V3.2.22 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
+  setText("dataStatus", "V3.2.23 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
     (view.candleTime ? " · Confirmed candle ended " + timeText(new Date(Date.parse(view.candleTime) + 120000).toISOString()) : ""));
   setText("controlHeadline", view.candleControl === "BULLS" ? "BUYERS LEAD THE LAST COMPLETED CANDLE" :
     view.candleControl === "BEARS" ? "SELLERS LEAD THE LAST COMPLETED CANDLE" : "LAST COMPLETED CANDLE SHOWS INDECISION");
@@ -8020,7 +8066,7 @@ app.get("/paper-study", authorizeBVBEvents, (req, res) => {
     symbol: paperStudy.symbol,
     timeframe: paperStudy.timeframe,
     strategyNotes: {
-      OliverLive: "Paper-only Oliver variant: for the 20-SMA color-change setup, a completed opposing pullback candle near the 20 arms its high/low immediately and the existing GOOGL live trade stream enters on the break without waiting for the takeover candle to close. Other Oliver events retain completed-candle setup recognition. Invalidation remains live; opposite setups and 200-SMA regime loss remain completed-candle confirmations.",
+      OliverLive: "Paper-only Oliver variant: for the 20-SMA color-change setup, a completed opposing pullback candle near the 20 arms its high/low immediately and the existing GOOGL live trade stream enters on the break without waiting for the takeover candle to close. Before entry, the pullback candle invalidates a failed setup; after entry, the stop is frozen at the developing entry candle low for CALL or high for PUT at the instant the trigger fires. Other Oliver events retain completed-candle setup recognition. Opposite setups and 200-SMA regime loss remain completed-candle confirmations.",
       AgentB: "Momentum Trader paper study: 2-minute structure, 5-minute confirmation, 8/20/200 alignment, accomplished breakout/continuation, named momentum events, support/resistance, no chasing, and fast invalidation. Uncertainty defaults to WAIT.",
       AgentC: "Unchanged Agent C v1 baseline; existing history preserved.",
       AgentCChopLock: "Paper-only C variant: caution/chop blocks new entries and immediate reversals; strong breakout or confirmed follow-through unlocks. Existing C exits preserved.",
