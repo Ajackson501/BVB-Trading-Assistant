@@ -222,7 +222,7 @@ let analysisTimingAudit = {
 };
 let developingCandleTiming = null;
 
-const PAPER_STUDY_VERSION = "Oliver-v1.2_vs_OliverLive-v1_vs_AgentB-v1_vs_AgentC-v1_vs_AgentCChopLock-v1_vs_Rider-v1_15MBiasTag-v1";
+const PAPER_STUDY_VERSION = "Oliver-v1.2_vs_OliverLive-v2_vs_AgentB-v1_vs_AgentC-v1_vs_AgentCChopLock-v1_vs_Rider-v1_15MBiasTag-v1";
 const PAPER_AGENT_NAMES = ["Oliver", "OliverLive", "AgentB", "AgentC", "Rider", "AgentCChopLock"];
 // Experimental settings, not optimized or established profitable rules.
 const C_CHOP_TEST = Object.freeze({ version: "C-ChopLock-v1", rangeBars: 8,
@@ -920,6 +920,74 @@ function runOliverPaperTrader(candles) {
   }
 }
 
+function analyzeOliverLive20Pullback(candles) {
+  if (!Array.isArray(candles) || candles.length < 201) return null;
+  const current = candles[candles.length - 1];
+  const price = Number(current.close);
+  const sma8 = calculateSMA(candles, 8);
+  const sma20 = calculateSMA(candles, 20);
+  const sma200 = calculateSMA(candles, 200);
+  const previousSMA8 = calculatePreviousSMA(candles, 8);
+  const previousSMA20 = calculatePreviousSMA(candles, 20);
+  const previousSMA200 = calculatePreviousSMA(candles, 200);
+  if (![price,sma8,sma20,sma200,previousSMA8,previousSMA20,previousSMA200].every(Number.isFinite)) return null;
+
+  const direction = candleDirection(current);
+  const tolerance = Math.max(price * 0.0025, 0.20);
+  const near20 = Math.min(
+    Math.abs(Number(current.low) - sma20),
+    Math.abs(Number(current.high) - sma20),
+    Math.abs(price - sma20)
+  ) <= tolerance;
+  if (!near20) return null;
+
+  // Existing trend context remains intact during the pullback even if price
+  // temporarily falls below/above the 8 SMA. This is deliberately looser than
+  // Oliver's post-takeover state check because Live Oliver must arm before the
+  // takeover candle has completed.
+  const bullishTrend =
+    sma8 > sma20 &&
+    sma8 >= previousSMA8 &&
+    sma20 >= previousSMA20 &&
+    price > sma200 &&
+    sma200 > previousSMA200;
+
+  const bearishTrend =
+    sma8 < sma20 &&
+    sma8 <= previousSMA8 &&
+    sma20 <= previousSMA20 &&
+    price < sma200 &&
+    sma200 < previousSMA200;
+
+  if (bullishTrend && direction === "RED") {
+    return {
+      direction: "CALL",
+      trigger: Number(current.high),
+      invalidation: Number(current.low),
+      setupCandleTime: current.time,
+      entryEvent: "BULLISH_LIVE_BREAK_RED_NEAR_20_SMA",
+      regime: "BULLISH_REGIME",
+      reason: "Bullish trend pullback: red regular candle completed near the 20 SMA; enter live if price breaks above its high.",
+      source: "LIVE_20_SMA_PULLBACK"
+    };
+  }
+
+  if (bearishTrend && direction === "GREEN") {
+    return {
+      direction: "PUT",
+      trigger: Number(current.low),
+      invalidation: Number(current.high),
+      setupCandleTime: current.time,
+      entryEvent: "BEARISH_LIVE_BREAK_GREEN_NEAR_20_SMA",
+      regime: "BEARISH_REGIME",
+      reason: "Bearish trend pullback: green regular candle completed near the 20 SMA; enter live if price breaks below its low.",
+      source: "LIVE_20_SMA_PULLBACK"
+    };
+  }
+
+  return null;
+}
+
 function runOliverLiveCompletedPaperTrader(candles) {
   if (candles.length < 200) return;
   const candle = candles[candles.length - 1];
@@ -941,26 +1009,53 @@ function runOliverLiveCompletedPaperTrader(candles) {
     return;
   }
 
+  const live20Candidate = analyzeOliverLive20Pullback(candles);
+
   if (agent.pendingSetup) {
     recordPaperDecision("OliverLive", { time: candle.time, type: "SETUP_EXPIRED",
       direction: agent.pendingSetup.direction, trigger: agent.pendingSetup.trigger,
-      reason: "Live trigger was not reached before the next 2-minute candle completed." });
+      reason: agent.pendingSetup.source === "LIVE_20_SMA_PULLBACK"
+        ? "Live 20-SMA pullback trigger was not reached before the next 2-minute candle completed."
+        : "Live trigger was not reached before the next 2-minute candle completed." });
     agent.pendingSetup = null;
   }
 
-  if (analysis.action === "CALL_SETUP" || analysis.action === "PUT_SETUP") {
+  // Oliver Live's color-change rule is intentionally earlier than Original Oliver:
+  // a completed opposing pullback candle at the 20 arms its own high/low as the
+  // live entry trigger. The following takeover candle does NOT have to close first.
+  if (live20Candidate) {
+    agent.pendingSetup = { ...live20Candidate };
+    agent.lastEvaluation = { time: candle.time, signal: `ARMED_${live20Candidate.direction}`,
+      reason: `${live20Candidate.reason} Trigger ${Number(live20Candidate.trigger).toFixed(4)}.` };
+    recordPaperDecision("OliverLive", { time: candle.time, type: "SETUP_ARMED_LIVE_20",
+      direction: live20Candidate.direction, trigger: live20Candidate.trigger,
+      invalidation: live20Candidate.invalidation, reason: live20Candidate.reason });
+    savePaperStudy();
+    return;
+  }
+
+  // Preserve Oliver Live's other established experimental events. Completed
+  // takeover/color-change events are excluded here because that specific event
+  // is now handled by the earlier live 20-SMA trigger above.
+  const completedTakeoverEvent = typeof analysis.entryEvent === "string" &&
+    analysis.entryEvent.includes("TAKEOVER_NEAR_20_SMA");
+  if (!completedTakeoverEvent && (analysis.action === "CALL_SETUP" || analysis.action === "PUT_SETUP")) {
     const direction = analysis.action === "CALL_SETUP" ? "CALL" : "PUT";
     agent.pendingSetup = {
       direction, trigger: Number(analysis.trigger), invalidation: Number(analysis.invalidation),
-      setupCandleTime: candle.time, entryEvent: analysis.entryEvent, regime: analysis.regime, reason: analysis.reason
+      setupCandleTime: candle.time, entryEvent: analysis.entryEvent, regime: analysis.regime,
+      reason: analysis.reason, source: "COMPLETED_OLIVER_EVENT"
     };
     agent.lastEvaluation = { time: candle.time, signal: `ARMED_${direction}`,
-      reason: `Completed Oliver setup armed. Waiting for live price to reach ${Number(analysis.trigger).toFixed(4)}.` };
+      reason: `Completed Oliver non-takeover setup armed. Waiting for live price to reach ${Number(analysis.trigger).toFixed(4)}.` };
     recordPaperDecision("OliverLive", { time: candle.time, type: "SETUP_ARMED", direction,
       trigger: Number(analysis.trigger), invalidation: Number(analysis.invalidation), reason: analysis.reason });
     savePaperStudy();
   } else {
-    agent.lastEvaluation = { time: candle.time, signal: "WAIT", reason: analysis.reason || "No Oliver setup armed." };
+    agent.lastEvaluation = { time: candle.time, signal: "WAIT",
+      reason: completedTakeoverEvent
+        ? "Completed takeover belongs to Original Oliver; Oliver Live only enters this setup on the earlier live break of the opposing 20-SMA pullback candle."
+        : analysis.reason || "No Oliver setup armed." };
   }
 }
 
@@ -1006,9 +1101,12 @@ function runOliverLiveTrigger(trade) {
   const triggered = setup.direction === "CALL" ? price >= Number(setup.trigger) : price <= Number(setup.trigger);
   if (!triggered) return;
   openPaperPositionAtLivePrice("OliverLive", setup.direction, trade,
-    `Oliver live trigger reached after completed setup: ${setup.reason}`, {
+    setup.source === "LIVE_20_SMA_PULLBACK"
+      ? `Oliver Live 20-SMA break triggered: ${setup.reason}`
+      : `Oliver live trigger reached after completed setup: ${setup.reason}`, {
       entryEvent: setup.entryEvent, trigger: setup.trigger, invalidation: setup.invalidation,
-      regime: setup.regime, setupCandleTime: setup.setupCandleTime, execution: "LIVE_TRADE"
+      regime: setup.regime, setupCandleTime: setup.setupCandleTime,
+      setupSource: setup.source || "UNKNOWN", execution: "LIVE_TRADE"
     });
 }
 
@@ -2616,23 +2714,26 @@ function detectTakeoverNearSMA(
   const current =
     candles[candles.length - 1];
 
-  const price =
-    Number(current.close);
+  const anchorPrice =
+    Number(previous.close);
 
   const tolerance =
     Math.max(
-      price * 0.0025,
+      anchorPrice * 0.0025,
       0.20
     );
 
-  const near20 =
+  // The opposing pullback candle is the location anchor.
+  // Bullish: previous red candle must be near the 20, then current green
+  // completes the takeover. Bearish is the mirror image.
+  const previousNear20 =
     Math.min(
-      Math.abs(Number(current.low) - sma20),
-      Math.abs(Number(current.high) - sma20),
-      Math.abs(price - sma20)
+      Math.abs(Number(previous.low) - sma20),
+      Math.abs(Number(previous.high) - sma20),
+      Math.abs(anchorPrice - sma20)
     ) <= tolerance;
 
-  if (!near20) {
+  if (!previousNear20) {
     return null;
   }
 
@@ -6126,7 +6227,7 @@ function buildDashboardView(now = Date.now()) {
     hasClose ? { price:lastClose, source:"CANDLE", time:new Date(Date.parse(candleTime)+120000).toISOString() } :
     { price:null, source:"UNAVAILABLE", time:null };
   return {
-    priceDisplay, version:"3.2.20", regularHours:session.regularHours, session:session.session, fresh,
+    priceDisplay, version:"3.2.21", regularHours:session.regularHours, session:session.session, fresh,
     candleTime, quoteTime:latestGOOGLTrade?.time || null, direction, entrySignal:c.analysis.signal,
     pulseDirection, chopState:chop.state, chopActive, warningPending, strength:c.strength,
     candleControl: c.strength.doji ? "NEUTRAL" : c.strength.color === "GREEN" ? "BULLS" : c.strength.color === "RED" ? "BEARS" : "NEUTRAL",
@@ -7397,7 +7498,7 @@ body.trade-active .pressureSupport { display:none; }
   </div>
 
   <div class="warning" id="warningSummary">${view.warning}</div>
-  <div class="dataStatus" id="dataStatus">V3.2.20 TEST · Waiting for a fresh price</div>
+  <div class="dataStatus" id="dataStatus">V3.2.21 TEST · Waiting for a fresh price</div>
   <a class="researchAccess" href="/research" title="Paper-trading research only">Research<span>Paper trades • For testing only</span></a>
 
 </div>
@@ -7509,7 +7610,7 @@ function renderMarket() {
     display.source === "TRADE" ? (fresh && view.regularHours ? "Live trade price" : "Last received trade price") : "Price unavailable";
   setText("liveHeaderPrice", "GOOGL " + (Number.isFinite(display.price) && display.price > 0 ? dollars(display.price) : "—"));
   setText("priceSource", sourceLabel);
-  setText("dataStatus", "V3.2.20 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
+  setText("dataStatus", "V3.2.21 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
     (view.candleTime ? " · Confirmed candle ended " + timeText(new Date(Date.parse(view.candleTime) + 120000).toISOString()) : ""));
   setText("controlHeadline", view.candleControl === "BULLS" ? "BUYERS LEAD THE LAST COMPLETED CANDLE" :
     view.candleControl === "BEARS" ? "SELLERS LEAD THE LAST COMPLETED CANDLE" : "LAST COMPLETED CANDLE SHOWS INDECISION");
@@ -7896,7 +7997,7 @@ app.get("/paper-study", authorizeBVBEvents, (req, res) => {
     symbol: paperStudy.symbol,
     timeframe: paperStudy.timeframe,
     strategyNotes: {
-      OliverLive: "Paper-only Oliver variant: completed 2-minute candles establish State/Location/Event and arm exact trigger/invalidation prices; the existing GOOGL live trade stream executes trigger and invalidation crossings without another Alpaca connection. Opposite setups and 200 SMA regime loss remain completed-candle confirmations.",
+      OliverLive: "Paper-only Oliver variant: for the 20-SMA color-change setup, a completed opposing pullback candle near the 20 arms its high/low immediately and the existing GOOGL live trade stream enters on the break without waiting for the takeover candle to close. Other Oliver events retain completed-candle setup recognition. Invalidation remains live; opposite setups and 200-SMA regime loss remain completed-candle confirmations.",
       AgentB: "Momentum Trader paper study: 2-minute structure, 5-minute confirmation, 8/20/200 alignment, accomplished breakout/continuation, named momentum events, support/resistance, no chasing, and fast invalidation. Uncertainty defaults to WAIT.",
       AgentC: "Unchanged Agent C v1 baseline; existing history preserved.",
       AgentCChopLock: "Paper-only C variant: caution/chop blocks new entries and immediate reversals; strong breakout or confirmed follow-through unlocks. Existing C exits preserved.",
