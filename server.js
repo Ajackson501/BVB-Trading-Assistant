@@ -179,11 +179,8 @@ const MAX_COMPLETED_CANDLES = 300;
 
 let historySeeded = false;
 
-// Daily higher-timeframe context. These bars are kept separate from
-// the 2-minute execution engine so Daily Bias can guide without vetoing
-// Oliver/BVB intraday signals.
-let dailyCandles = [];
-let dailyHistorySeeded = false;
+// Visible higher-timeframe context comes from completed 15-minute bars already
+// maintained for the paper study; no separate daily-bar bias feed is used.
 
 
 // ==================================================
@@ -225,7 +222,7 @@ let analysisTimingAudit = {
 };
 let developingCandleTiming = null;
 
-const PAPER_STUDY_VERSION = "Oliver-v1.2_vs_OliverLive-v1_vs_AgentB-v1_vs_AgentC-v1_vs_AgentCChopLock-v1_vs_Rider-v1";
+const PAPER_STUDY_VERSION = "Oliver-v1.2_vs_OliverLive-v1_vs_AgentB-v1_vs_AgentC-v1_vs_AgentCChopLock-v1_vs_Rider-v1_15MBiasTag-v1";
 const PAPER_AGENT_NAMES = ["Oliver", "OliverLive", "AgentB", "AgentC", "Rider", "AgentCChopLock"];
 // Experimental settings, not optimized or established profitable rules.
 const C_CHOP_TEST = Object.freeze({ version: "C-ChopLock-v1", rangeBars: 8,
@@ -244,6 +241,25 @@ const AGENT_B_TEST = Object.freeze({
   noChaseMaxAverageRanges: 1.0,
   tailWickToBody: 1.5
 });
+
+function current15MinuteBiasForPaper() {
+  if (Array.isArray(riderCandles15m) && riderCandles15m.length >= 21 && typeof analyze15MinuteBias === "function") {
+    return analyze15MinuteBias(riderCandles15m);
+  }
+  return { bias: "BUILDING", analyzedCandle: null, confirmed: false };
+}
+
+function classify15MinuteAlignment(direction) {
+  const biasResult = current15MinuteBiasForPaper();
+  const bias = biasResult?.bias || "BUILDING";
+  let alignment = "NEUTRAL";
+  if (direction === "CALL" && bias === "BULLISH") alignment = "ALIGNED";
+  else if (direction === "PUT" && bias === "BEARISH") alignment = "ALIGNED";
+  else if (direction === "CALL" && bias === "BEARISH") alignment = "COUNTERTREND";
+  else if (direction === "PUT" && bias === "BULLISH") alignment = "COUNTERTREND";
+  return { timeframe: "15Min", bias, alignment, analyzedCandle: biasResult?.analyzedCandle || null,
+    confirmed: Boolean(biasResult?.confirmed) };
+}
 
 function newPaperAgentState() {
   return { position: null, trades: [], decisions: [], lastProcessedCandle: null, lastEvaluation: null, pendingSetup: null };
@@ -456,12 +472,16 @@ function recordPaperDecision(agentName, decision) {
 function openPaperPosition(agentName, direction, candle, reason, metadata = {}) {
   const agent = paperStudy.agents[agentName];
   if (!agent || agent.position) return false;
+  const bias15mTag = classify15MinuteAlignment(direction);
   agent.position = {
     direction,
     entryTime: candle.time,
     entryPrice: Number(candle.close),
     entryReason: reason,
     entryMetadata: metadata,
+    bias15mAtEntry: bias15mTag.bias,
+    bias15mAlignment: bias15mTag.alignment,
+    bias15mCandleAtEntry: bias15mTag.analyzedCandle,
     bestPrice: Number(candle.close),
     worstPrice: Number(candle.close),
     barsHeld: 0
@@ -514,6 +534,10 @@ function closePaperPosition(agentName, candle, reason, metadata = {}) {
     maxFavorableMove: Number(favorableMove.toFixed(4)),
     maxAdverseMove: Number(adverseMove.toFixed(4)),
     result: signedMove > 0 ? "FAVORABLE" : signedMove < 0 ? "UNFAVORABLE" : "FLAT",
+    bias15mAtEntry: p.bias15mAtEntry || "UNKNOWN",
+    bias15mAlignment: p.bias15mAlignment || "NEUTRAL",
+    bias15mCandleAtEntry: p.bias15mCandleAtEntry || null,
+    bias15mAtExit: current15MinuteBiasForPaper().bias,
     metadata
   };
   agent.trades.push(trade);
@@ -531,8 +555,10 @@ function openPaperPositionAtLivePrice(agentName, direction, trade, reason, metad
   const agent = paperStudy.agents[agentName];
   const price = Number(trade?.price);
   if (!agent || agent.position || !Number.isFinite(price) || !trade?.time) return false;
+  const bias15mTag = classify15MinuteAlignment(direction);
   agent.position = {
     direction, entryTime: trade.time, entryPrice: price, entryReason: reason, entryMetadata: metadata,
+    bias15mAtEntry: bias15mTag.bias, bias15mAlignment: bias15mTag.alignment, bias15mCandleAtEntry: bias15mTag.analyzedCandle,
     bestPrice: price, worstPrice: price, barsHeld: 0
   };
   agent.pendingSetup = null;
@@ -569,7 +595,9 @@ function closePaperPositionAtLivePrice(agentName, trade, reason, metadata = {}) 
     entryReason: p.entryReason, exitTime: trade.time, exitPrice, exitReason: reason, barsHeld: p.barsHeld,
     underlyingMove: Number(signedMove.toFixed(4)), maxFavorableMove: Number(favorableMove.toFixed(4)),
     maxAdverseMove: Number(adverseMove.toFixed(4)),
-    result: signedMove > 0 ? "FAVORABLE" : signedMove < 0 ? "UNFAVORABLE" : "FLAT", metadata
+    result: signedMove > 0 ? "FAVORABLE" : signedMove < 0 ? "UNFAVORABLE" : "FLAT",
+    bias15mAtEntry: p.bias15mAtEntry || "UNKNOWN", bias15mAlignment: p.bias15mAlignment || "NEUTRAL",
+    bias15mCandleAtEntry: p.bias15mCandleAtEntry || null, bias15mAtExit: current15MinuteBiasForPaper().bias, metadata
   };
   agent.trades.push(tradeRecord);
   agent.position = null;
@@ -1210,11 +1238,27 @@ function paperDailySummary(dateKey = studyDateKey(new Date())) {
       tradeLog: trades
     };
   };
+  const summarizeAlignment = (name) => {
+    const trades = paperStudy.agents[name].trades.filter(t => studyDateKey(t.entryTime) === dateKey);
+    const buckets = {};
+    for (const label of ["ALIGNED", "COUNTERTREND", "NEUTRAL"]) {
+      const group = trades.filter(t => (t.bias15mAlignment || "NEUTRAL") === label);
+      buckets[label] = {
+        trades: group.length,
+        favorable: group.filter(t => t.result === "FAVORABLE").length,
+        unfavorable: group.filter(t => t.result === "UNFAVORABLE").length,
+        flat: group.filter(t => t.result === "FLAT").length,
+        totalUnderlyingMove: Number(group.reduce((sum, t) => sum + Number(t.underlyingMove || 0), 0).toFixed(4))
+      };
+    }
+    return buckets;
+  };
   return {
     date: dateKey,
     symbol: "GOOGL",
     timeframe: "2Min",
     note: "Results measure GOOGL underlying movement from paper entry to paper exit; they are not option-contract P/L.",
+    bias15mStudy: Object.fromEntries(PAPER_AGENT_NAMES.map(name => [name, summarizeAlignment(name)])),
     Oliver: summarize("Oliver"),
     OliverLive: summarize("OliverLive"),
     AgentB: summarize("AgentB"),
@@ -1608,10 +1652,6 @@ function addCompletedRiderCandle(timeframeMinutes, candle) {
 }
 
 
-// ==================================================
-// SEED COMPLETED DAILY HISTORY FROM ALPACA
-// ==================================================
-
 function newYorkDateKey(dateInput) {
   const date = dateInput instanceof Date ? dateInput : new Date(dateInput);
   if (Number.isNaN(date.getTime())) return null;
@@ -1625,67 +1665,6 @@ function newYorkDateKey(dateInput) {
 
   const get = (type) => parts.find((part) => part.type === type)?.value;
   return `${get("year")}-${get("month")}-${get("day")}`;
-}
-
-async function seedDailyCandles() {
-  if (!ALPACA_API_KEY || !ALPACA_SECRET_KEY) {
-    console.error("Cannot seed daily history: Alpaca credentials missing.");
-    return;
-  }
-
-  try {
-    console.log("Seeding five completed daily GOOGL candles from Alpaca...");
-
-    const end = new Date();
-    const start = new Date();
-    start.setUTCDate(start.getUTCDate() - 30);
-
-    const params = new URLSearchParams({
-      timeframe: "1Day",
-      start: start.toISOString(),
-      end: end.toISOString(),
-      limit: "1000",
-      feed: "iex",
-      adjustment: "raw"
-    });
-
-    const response = await fetch(
-      `https://data.alpaca.markets/v2/stocks/GOOGL/bars?${params.toString()}`,
-      {
-        headers: {
-          "APCA-API-KEY-ID": ALPACA_API_KEY,
-          "APCA-API-SECRET-KEY": ALPACA_SECRET_KEY
-        }
-      }
-    );
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      console.error("Daily seed failed:", response.status, data);
-      return;
-    }
-
-    const todayET = newYorkDateKey(new Date());
-
-    // Daily Bias deliberately uses completed daily bars only. The current
-    // trading day's still-forming daily candle is excluded.
-    dailyCandles = (data.bars || [])
-      .map(normalizeBar)
-      .filter((bar) => newYorkDateKey(bar.time) !== todayET)
-      .sort((a, b) => new Date(a.time) - new Date(b.time))
-      .slice(-5);
-
-    dailyHistorySeeded = dailyCandles.length >= 5;
-    trendHold.analyzedCandle = null;
-    updateTrendHold(completedCandles, analyzeTrendBattle(completedCandles));
-
-    console.log(
-      `Daily seed complete: ${dailyCandles.length} completed daily candles loaded.`
-    );
-  } catch (error) {
-    console.error("Daily seed error:", error);
-  }
 }
 
 // ==================================================
@@ -3996,67 +3975,70 @@ function getHABodyMomentum(
 // DAILY BIAS — HIGHER-TIMEFRAME CONTEXT ONLY
 // --------------------------------------------------
 
-function analyzeDailyBias(candles) {
-  if (!Array.isArray(candles) || candles.length < 5) {
+function analyze15MinuteBias(candles) {
+  if (!Array.isArray(candles) || candles.length < 21) {
     return {
       bias: "BUILDING", arrow: "…", confirmed: false,
-      confirmation: "WAITING_FOR_5_DAILY_BARS",
-      reason: `Need ${Math.max(0, 5 - (candles?.length || 0))} more completed daily candles.`,
-      completedCandles: Array.isArray(candles) ? candles.length : 0
+      confirmation: "WAITING_FOR_21_15M_BARS",
+      reason: `Need ${Math.max(0, 21 - (candles?.length || 0))} more completed 15-minute candles.`,
+      completedCandles: Array.isArray(candles) ? candles.length : 0,
+      timeframe: "15Min"
     };
   }
 
-  // 5-DAY / 1-WEEK BIAS: context only. Exactly the five most recent
-  // completed 1-day candles determine the working higher-timeframe view.
-  const week = candles.slice(-5);
-  const first = week[0];
-  const current = week[week.length - 1];
-  const firstClose = Number(first.close);
+  // 15-MINUTE BIAS: intraday context only. It does not veto 2-minute trades.
+  // Completed 15-minute candles establish the broader intraday direction using
+  // the same 8/20 relationship already familiar in the app. The 200 SMA is
+  // recorded as background context when enough history exists, but it is not a
+  // hard requirement for the bias itself.
+  const recent = candles.slice(-60);
+  const current = recent[recent.length - 1];
   const price = Number(current.close);
-  const net = price - firstClose;
-  const netPct = firstClose ? (net / firstClose) * 100 : 0;
-  let upDays = 0, downDays = 0;
-  for (let i = 1; i < week.length; i++) {
-    const d = Number(week[i].close) - Number(week[i - 1].close);
-    if (d > 0) upDays++;
-    else if (d < 0) downDays++;
-  }
-  const ha = buildHeikinAshi(week);
+  const sma8 = calculateSMA(recent, 8);
+  const sma20 = calculateSMA(recent, 20);
+  const prev8 = calculatePreviousSMA(recent, 8);
+  const prev20 = calculatePreviousSMA(recent, 20);
+  const sma200 = candles.length >= 200 ? calculateSMA(candles, 200) : null;
+  const ha = buildHeikinAshi(recent);
   const currentHA = ha[ha.length - 1];
   const haRun = getHARun(ha);
-  const structure = detectStructure(week);
+  const structure = detectStructure(recent.slice(-8));
 
+  const bullishTrend = price > sma20 && sma8 > sma20 && sma8 >= prev8 && sma20 >= prev20;
+  const bearishTrend = price < sma20 && sma8 < sma20 && sma8 <= prev8 && sma20 <= prev20;
   let bias = "TRANSITION", arrow = "↔";
-  if (net > 0 && upDays >= downDays) { bias = "BULLISH"; arrow = "↑"; }
-  else if (net < 0 && downDays >= upDays) { bias = "BEARISH"; arrow = "↓"; }
+  if (bullishTrend) { bias = "BULLISH"; arrow = "↑"; }
+  else if (bearishTrend) { bias = "BEARISH"; arrow = "↓"; }
 
   const bullishHA = currentHA?.color === "GREEN" && !currentHA?.isDoji;
   const bearishHA = currentHA?.color === "RED" && !currentHA?.isDoji;
   const confirmed = (bias === "BULLISH" && bullishHA) || (bias === "BEARISH" && bearishHA);
   const confirmation = confirmed ? "HA_CONFIRMED" : bias === "TRANSITION" ? "MIXED" : "HA_NOT_CONFIRMED";
   const evidence = [
-    `5-day net ${net >= 0 ? "+" : ""}${net.toFixed(2)} (${netPct >= 0 ? "+" : ""}${netPct.toFixed(2)}%)`,
-    `${upDays} up day(s) / ${downDays} down day(s)`,
-    `Latest daily HA ${currentHA?.color || "UNKNOWN"}`
+    `15m close $${price.toFixed(2)} vs 8 SMA $${sma8.toFixed(2)} / 20 SMA $${sma20.toFixed(2)}`,
+    `8 SMA ${sma8 >= prev8 ? "rising/flat" : "falling"}; 20 SMA ${sma20 >= prev20 ? "rising/flat" : "falling"}`,
+    `Latest 15m HA ${currentHA?.color || "UNKNOWN"}`
   ];
-  if (structure === "HH_HL") evidence.push("5-day HH/HL structure");
-  if (structure === "LH_LL") evidence.push("5-day LH/LL structure");
+  if (structure === "HH_HL") evidence.push("15m HH/HL structure");
+  if (structure === "LH_LL") evidence.push("15m LH/LL structure");
+  if (Number.isFinite(sma200)) evidence.push(`15m price ${price >= sma200 ? "above" : "below"} 200 SMA`);
 
   return {
     bias, arrow, confirmed, confirmation,
     reason: bias === "TRANSITION"
-      ? "Five-day daily-candle view is mixed/transitioning; context only."
-      : `${bias} five-day daily-candle context${confirmed ? "; latest daily Heikin-Ashi confirms." : "; latest daily Heikin-Ashi has not confirmed."}`,
-    price: Number(price.toFixed(4)), firstClose: Number(firstClose.toFixed(4)),
-    net: Number(net.toFixed(4)), netPct: Number(netPct.toFixed(3)),
+      ? "15-minute intraday view is mixed/transitioning; context only."
+      : `${bias} 15-minute intraday context${confirmed ? "; latest 15-minute Heikin-Ashi confirms." : "; latest 15-minute Heikin-Ashi has not confirmed."}`,
+    price: Number(price.toFixed(4)),
+    sma8: Number(sma8.toFixed(4)), sma20: Number(sma20.toFixed(4)),
+    sma200: Number.isFinite(sma200) ? Number(sma200.toFixed(4)) : null,
     structure, haColor: currentHA?.color || "UNKNOWN", haDoji: Boolean(currentHA?.isDoji),
     haRunColor: haRun.color, haRunCandles: haRun.count, evidence,
-    analyzedCandle: current.time, completedCandles: week.length
+    analyzedCandle: current.time, completedCandles: recent.length, timeframe: "15Min"
   };
 }
 
-function buildMarketReadV2(battle, dailyBias) {
-  const bias = dailyBias?.bias || "BUILDING";
+function buildMarketReadV2(battle, bias15m) {
+  const bias = bias15m?.bias || "BUILDING";
   const control = battle?.control || "NEUTRAL";
   const phase = battle?.phase || "WAIT";
   const action = battle?.action || "WAIT";
@@ -4064,10 +4046,10 @@ function buildMarketReadV2(battle, dailyBias) {
 
   let alignment = "NEUTRAL / TRANSITION";
 
-  if (bias === "BULLISH" && control === "BULLS") alignment = "WITH 5-DAY BIAS";
-  if (bias === "BEARISH" && control === "BEARS") alignment = "WITH 5-DAY BIAS";
-  if (bias === "BULLISH" && control === "BEARS") alignment = "COUNTER 5-DAY BIAS";
-  if (bias === "BEARISH" && control === "BULLS") alignment = "COUNTER 5-DAY BIAS";
+  if (bias === "BULLISH" && control === "BULLS") alignment = "WITH 15M BIAS";
+  if (bias === "BEARISH" && control === "BEARS") alignment = "WITH 15M BIAS";
+  if (bias === "BULLISH" && control === "BEARS") alignment = "COUNTER 15M BIAS";
+  if (bias === "BEARISH" && control === "BULLS") alignment = "COUNTER 15M BIAS";
 
   let headline = "WAIT — battle is not directional enough yet.";
 
@@ -4076,32 +4058,32 @@ function buildMarketReadV2(battle, dailyBias) {
   } else if (changeWatch === "WATCH") {
     headline = `${control} still control the 2-minute trend, but the move is weakening.`;
   } else if (action === "CALL_ENTRY_READY") {
-    headline = alignment === "WITH 5-DAY BIAS"
-      ? "Potential CALL trend entry. The short-term move agrees with the 5-day context. Check the trigger and invalidation."
-      : "Potential CALL trend entry. The 5-day context disagrees or is unconfirmed. Check the trigger and invalidation.";
+    headline = alignment === "WITH 15M BIAS"
+      ? "Potential CALL trend entry. The short-term move agrees with the 15-minute context. Check the trigger and invalidation."
+      : "Potential CALL trend entry. The 15-minute context disagrees or is unconfirmed. Check the trigger and invalidation.";
   } else if (action === "PUT_ENTRY_READY") {
-    headline = alignment === "WITH 5-DAY BIAS"
-      ? "Potential PUT trend entry. The short-term move agrees with the 5-day context. Check the trigger and invalidation."
-      : "Potential PUT trend entry. The 5-day context disagrees or is unconfirmed. Check the trigger and invalidation.";
+    headline = alignment === "WITH 15M BIAS"
+      ? "Potential PUT trend entry. The short-term move agrees with the 15-minute context. Check the trigger and invalidation."
+      : "Potential PUT trend entry. The 15-minute context disagrees or is unconfirmed. Check the trigger and invalidation.";
   } else if (control === "BULLS") {
-    headline = alignment === "WITH 5-DAY BIAS"
-      ? `Bulls control the 2-minute trend and are moving with the ${bias.toLowerCase()} 5-day context.`
-      : alignment === "COUNTER 5-DAY BIAS"
-      ? `Bulls control the 2-minute trend, but the move is against the ${bias.toLowerCase()} 5-day context.`
-      : "Bulls control the 2-minute trend while the 5-day context is still developing.";
+    headline = alignment === "WITH 15M BIAS"
+      ? `Bulls control the 2-minute trend and are moving with the ${bias.toLowerCase()} 15-minute context.`
+      : alignment === "COUNTER 15M BIAS"
+      ? `Bulls control the 2-minute trend, but the move is against the ${bias.toLowerCase()} 15-minute context.`
+      : "Bulls control the 2-minute trend while the 15-minute context is still developing.";
   } else if (control === "BEARS") {
-    headline = alignment === "WITH 5-DAY BIAS"
-      ? `Bears control the 2-minute trend and are moving with the ${bias.toLowerCase()} 5-day context.`
-      : alignment === "COUNTER 5-DAY BIAS"
-      ? `Bears control the 2-minute trend, but the move is against the ${bias.toLowerCase()} 5-day context.`
-      : "Bears control the 2-minute trend while the 5-day context is still developing.";
+    headline = alignment === "WITH 15M BIAS"
+      ? `Bears control the 2-minute trend and are moving with the ${bias.toLowerCase()} 15-minute context.`
+      : alignment === "COUNTER 15M BIAS"
+      ? `Bears control the 2-minute trend, but the move is against the ${bias.toLowerCase()} 15-minute context.`
+      : "Bears control the 2-minute trend while the 15-minute context is still developing.";
   }
 
   return {
     headline,
     alignment,
     phase,
-    weekConfirmation: dailyBias?.confirmation || "WAITING",
+    biasConfirmation: bias15m?.confirmation || "WAITING",
     note: "Decision sequence: setup → trigger → trend health → deterioration → invalidation. Pressure alone is not an entry."
   };
 }
@@ -5456,7 +5438,6 @@ app.get(
 // ==================================================
 
 seedHistoricalCandles();
-seedDailyCandles();
 seedRiderBars(5, "5m");
 seedRiderBars(15, "15m");
 
@@ -5464,26 +5445,29 @@ connectAlpacaStream();
 
 
 // ==================================================
-// DAILY BIAS ENDPOINT
+// 15-MINUTE BIAS ENDPOINT
 // ==================================================
 
 app.get(
-  "/daily-bias",
+  "/15m-bias",
   (req, res) => {
-    const dailyBias = analyzeDailyBias(dailyCandles);
+    const bias15m = analyze15MinuteBias(riderCandles15m);
     const battle = analyzeTrendBattle(completedCandles);
 
     res.json({
       symbol: "GOOGL",
-      timeframe: "1Day",
-      dailyHistorySeeded,
-      completedDailyCandleCount: dailyCandles.length,
-      bias: dailyBias,
-      intradayAlignment: buildAIRead(battle, dailyBias),
+      timeframe: "15Min",
+      biasHistorySeeded: riderCandles15m.length >= 21,
+      completed15MinuteCandleCount: riderCandles15m.length,
+      bias: bias15m,
+      intradayAlignment: buildMarketReadV2(battle, bias15m),
       trendHold
     });
   }
 );
+
+// Backward-compatible alias for older bookmarks/integrations.
+app.get("/daily-bias", (req, res) => res.redirect(307, "/15m-bias"));
 
 // ==================================================
 // LIVE GOOGL ENDPOINT
@@ -6077,7 +6061,7 @@ function buildDashboardView(now = Date.now()) {
   const session = getMarketSession(new Date(now));
   const c = agentCDisplayContext(completedCandles);
   const battle = analyzeTrendBattle(completedCandles);
-  const daily = analyzeDailyBias(dailyCandles);
+  const bias15m = analyze15MinuteBias(riderCandles15m);
   const chop = displayChopRisk(completedCandles);
   const candleTime = completedCandles.at(-1)?.time || null;
   const candleAge = now - Date.parse(candleTime);
@@ -6120,8 +6104,8 @@ function buildDashboardView(now = Date.now()) {
   const marketRead = {
     headline: chopActive ? `Recent candles are overlapping. Last confirmed direction remains ${direction === "CALL" ? "bullish" : direction === "PUT" ? "bearish" : "unconfirmed"}.` :
       direction === "WAIT" ? "Neither side has confirmed control." : `${side} have confirmed control.${c.strength.opposition || c.strength.doji || c.strength.shrinking ? " " + c.strength.status + "." : ""}`,
-    context: daily.bias === "BULLISH" ? "5-day view: broader conditions favor buyers." :
-      daily.bias === "BEARISH" ? "5-day view: broader conditions favor sellers." : "5-day view: broader conditions are mixed or still developing.",
+    context: bias15m.bias === "BULLISH" ? "15-minute view: broader intraday conditions favor buyers." :
+      bias15m.bias === "BEARISH" ? "15-minute view: broader intraday conditions favor sellers." : "15-minute view: broader intraday conditions are mixed or still developing.",
     note: action.title + ". " + action.detail
   };
   const hasQuote = Number.isFinite(Number(latestGOOGLTrade?.price)) && Number(latestGOOGLTrade?.price) > 0 &&
@@ -6132,7 +6116,7 @@ function buildDashboardView(now = Date.now()) {
     hasClose ? { price:lastClose, source:"CANDLE", time:new Date(Date.parse(candleTime)+120000).toISOString() } :
     { price:null, source:"UNAVAILABLE", time:null };
   return {
-    priceDisplay, version:"3.2.18", regularHours:session.regularHours, session:session.session, fresh,
+    priceDisplay, version:"3.2.19", regularHours:session.regularHours, session:session.session, fresh,
     candleTime, quoteTime:latestGOOGLTrade?.time || null, direction, entrySignal:c.analysis.signal,
     pulseDirection, chopState:chop.state, chopActive, warningPending, strength:c.strength,
     candleControl: c.strength.doji ? "NEUTRAL" : c.strength.color === "GREEN" ? "BULLS" : c.strength.color === "RED" ? "BEARS" : "NEUTRAL",
@@ -6266,7 +6250,7 @@ app.get(
 
 
 const battle = analyzeTrendBattle(completedCandles);
-const dailyBias = analyzeDailyBias(dailyCandles);
+const bias15m = analyze15MinuteBias(riderCandles15m);
 const view = buildDashboardView();
 const aiRead = view.marketRead;
 const hold = view.hold;
@@ -7272,15 +7256,15 @@ body.trade-active .pressureSupport { display:none; }
     </div>
 
     <div class="session">
-      <div class="dailyBiasLabel">5-DAY MARKET BIAS · 1-DAY CANDLES</div>
-      <div class="dailyBiasValue ${dailyBias.bias === "BULLISH" ? "biasBull" : dailyBias.bias === "BEARISH" ? "biasBear" : "biasNeutral"}">
-        ${dailyBias.bias === "BULLISH" ? "🟢" : dailyBias.bias === "BEARISH" ? "🔴" : dailyBias.bias === "TRANSITION" ? "🟡" : "⚪"}
-        ${dailyBias.bias} ${dailyBias.arrow || ""}
+      <div class="dailyBiasLabel">15-MIN MARKET BIAS · 15-MIN CANDLES</div>
+      <div class="dailyBiasValue ${bias15m.bias === "BULLISH" ? "biasBull" : bias15m.bias === "BEARISH" ? "biasBear" : "biasNeutral"}">
+        ${bias15m.bias === "BULLISH" ? "🟢" : bias15m.bias === "BEARISH" ? "🔴" : bias15m.bias === "TRANSITION" ? "🟡" : "⚪"}
+        ${bias15m.bias} ${bias15m.arrow || ""}
       </div>
       <div class="dailyConfirm">
-        ${dailyBias.confirmed ? "5-DAY TREND CONFIRMED" : dailyBias.bias === "BUILDING" ? "5-DAY TREND BUILDING" : "5-DAY TREND NOT CONFIRMED"}
+        ${bias15m.confirmed ? "15-MIN TREND CONFIRMED" : bias15m.bias === "BUILDING" ? "15-MIN TREND BUILDING" : "15-MIN TREND NOT CONFIRMED"}
       </div>
-      <div class="dailyConfirm">${dailyBias.bias === "BULLISH" ? "Broader market conditions favor buyers." : dailyBias.bias === "BEARISH" ? "Broader market conditions favor sellers." : dailyBias.bias === "TRANSITION" ? "Broader market conditions are mixed." : "Broader market conditions are still developing."}</div>
+      <div class="dailyConfirm">${bias15m.bias === "BULLISH" ? "Broader intraday conditions favor buyers." : bias15m.bias === "BEARISH" ? "Broader intraday conditions favor sellers." : bias15m.bias === "TRANSITION" ? "Broader intraday conditions are mixed." : "Broader intraday conditions are still developing."}</div>
       <div class="marketLine">${marketSession} · ${regularHours ? "LIVE MARKET" : "MARKET CLOSED"} · <span id="marketClock">--:-- CT</span></div>
     </div>
 
@@ -7390,8 +7374,8 @@ body.trade-active .pressureSupport { display:none; }
   <div class="cards">
 
     <div class="card contextSupport">
-      <div class="label">5-DAY MARKET BIAS · 1-DAY CANDLES</div>
-      <div class="value">${dailyBias.bias} ${dailyBias.arrow || ""}</div>
+      <div class="label">15-MIN MARKET BIAS · 15-MIN CANDLES</div>
+      <div class="value">${bias15m.bias} ${bias15m.arrow || ""}</div>
     </div>
 
 
@@ -7403,7 +7387,7 @@ body.trade-active .pressureSupport { display:none; }
   </div>
 
   <div class="warning" id="warningSummary">${view.warning}</div>
-  <div class="dataStatus" id="dataStatus">V3.2.18 TEST · Waiting for a fresh price</div>
+  <div class="dataStatus" id="dataStatus">V3.2.19 TEST · Waiting for a fresh price</div>
   <a class="researchAccess" href="/research" title="Paper-trading research only">Research<span>Paper trades • For testing only</span></a>
 
 </div>
@@ -7475,7 +7459,7 @@ function renderDailyTradeResults() {
     net += move;
     if (move > 0.0001) wins++; else if (move < -0.0001) losses++; else flats++;
   }
-  const flatText = flats ? " / " + flats + "F" : "";
+  const flatText = flats ? " / " + flats + " Flat" : "";
   setText("dailyTradeResults", "TODAY: " + trades.length + " trade" + (trades.length === 1 ? "" : "s") + " • " + wins + "W / " + losses + "L" + flatText + " • Net " + moveText(Math.round(net*100)/100) + " GOOGL move");
 }
 let view = ${JSON.stringify(view)};
@@ -7515,7 +7499,7 @@ function renderMarket() {
     display.source === "TRADE" ? (fresh && view.regularHours ? "Live trade price" : "Last received trade price") : "Price unavailable";
   setText("liveHeaderPrice", "GOOGL " + (Number.isFinite(display.price) && display.price > 0 ? dollars(display.price) : "—"));
   setText("priceSource", sourceLabel);
-  setText("dataStatus", "V3.2.18 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
+  setText("dataStatus", "V3.2.19 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
     (view.candleTime ? " · Confirmed candle ended " + timeText(new Date(Date.parse(view.candleTime) + 120000).toISOString()) : ""));
   setText("controlHeadline", view.candleControl === "BULLS" ? "BUYERS LEAD THE LAST COMPLETED CANDLE" :
     view.candleControl === "BEARS" ? "SELLERS LEAD THE LAST COMPLETED CANDLE" : "LAST COMPLETED CANDLE SHOWS INDECISION");
@@ -7819,7 +7803,11 @@ app.get("/research", authorizeResearchPage, (req, res) => {
   }).join("");
   const tradeRows = PAPER_AGENT_NAMES.flatMap(name => (summary[name].tradeLog || []).map(t => ({...t, agent:name})))
     .sort((a,b) => Date.parse(a.entryTime) - Date.parse(b.entryTime))
-    .map(t => `<tr><td>${escapeHtml(t.agent)}</td><td>${escapeHtml(t.direction)}</td><td>${escapeHtml(formatPaperTime(t.entryTime))}</td><td>$${Number(t.entryPrice).toFixed(2)}</td><td>${escapeHtml(formatPaperTime(t.exitTime))}</td><td>$${Number(t.exitPrice).toFixed(2)}</td><td class="${Number(t.underlyingMove) >= 0 ? "pos" : "neg"}">${Number(t.underlyingMove) >= 0 ? "+" : ""}$${Number(t.underlyingMove).toFixed(3)}</td><td>${escapeHtml(t.exitReason)}</td></tr>`).join("");
+    .map(t => `<tr><td>${escapeHtml(t.agent)}</td><td>${escapeHtml(t.direction)}</td><td>${escapeHtml(formatPaperTime(t.entryTime))}</td><td>$${Number(t.entryPrice).toFixed(2)}</td><td>${escapeHtml(formatPaperTime(t.exitTime))}</td><td>$${Number(t.exitPrice).toFixed(2)}</td><td class="${Number(t.underlyingMove) >= 0 ? "pos" : "neg"}">${Number(t.underlyingMove) >= 0 ? "+" : ""}$${Number(t.underlyingMove).toFixed(3)}</td><td>${escapeHtml(t.bias15mAtEntry || "UNKNOWN")}</td><td>${escapeHtml(t.bias15mAlignment || "NEUTRAL")}</td><td>${escapeHtml(t.exitReason)}</td></tr>`).join("");
+  const alignmentRows = PAPER_AGENT_NAMES.flatMap(name => ["ALIGNED", "COUNTERTREND", "NEUTRAL"].map(label => {
+    const a = summary.bias15mStudy?.[name]?.[label] || {trades:0,favorable:0,unfavorable:0,flat:0,totalUnderlyingMove:0};
+    return `<tr><td>${escapeHtml(name)}</td><td>${escapeHtml(label)}</td><td>${a.trades}</td><td>${a.favorable}</td><td>${a.unfavorable}</td><td>${a.flat}</td><td class="${Number(a.totalUnderlyingMove) >= 0 ? "pos" : "neg"}">${Number(a.totalUnderlyingMove) >= 0 ? "+" : ""}$${Number(a.totalUnderlyingMove).toFixed(3)}</td></tr>`;
+  })).join("");
   const options = paperAvailableDates().map(d => `<option value="${d}"${d===dateKey?" selected":""}>${d}</option>`).join("");
   res.type("html").send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>BVB Research</title><style>
     body{font-family:system-ui,-apple-system,sans-serif;background:#080c12;color:#e9eef5;margin:0;padding:18px} .wrap{max-width:1100px;margin:auto}
@@ -7833,7 +7821,9 @@ app.get("/research", authorizeResearchPage, (req, res) => {
   <div class="notice"><b>Journal:</b> ${escapeHtml(persistence.message)}<br><span>${escapeHtml(persistence.file)}</span></div>
   <h2>Daily summary — ${escapeHtml(dateKey)}</h2><div class="scroll"><table><thead><tr><th>Agent</th><th>Trades</th><th>Wins</th><th>Losses</th><th>Flat</th><th>Net GOOGL move</th><th>Open position</th></tr></thead><tbody>${rows}</tbody></table></div>
   <div class="note">Underlying GOOGL movement only; not option P/L and before costs. Open positions are shown only for the selected date.</div>
-  <h2>Closed trades</h2><div class="scroll"><table><thead><tr><th>Agent</th><th>Side</th><th>Entry</th><th>Entry price</th><th>Exit</th><th>Exit price</th><th>Move</th><th>Exit reason</th></tr></thead><tbody>${tradeRows || '<tr><td colspan="8">No closed trades recorded for this date.</td></tr>'}</tbody></table></div>
+  <h2>15-minute alignment study</h2><div class="scroll"><table><thead><tr><th>Agent</th><th>15M alignment</th><th>Trades</th><th>Wins</th><th>Losses</th><th>Flat</th><th>Net GOOGL move</th></tr></thead><tbody>${alignmentRows}</tbody></table></div>
+  <div class="note">ALIGNED means the paper trade direction matched the completed 15-minute bias at entry. COUNTERTREND means it opposed the 15-minute bias. NEUTRAL includes mixed/building 15-minute conditions and legacy trades recorded before this tag existed.</div>
+  <h2>Closed trades</h2><div class="scroll"><table><thead><tr><th>Agent</th><th>Side</th><th>Entry</th><th>Entry price</th><th>Exit</th><th>Exit price</th><th>Move</th><th>15M bias</th><th>15M alignment</th><th>Exit reason</th></tr></thead><tbody>${tradeRows || '<tr><td colspan="10">No closed trades recorded for this date.</td></tr>'}</tbody></table></div>
   </div></body></html>`);
 });
 
@@ -7877,9 +7867,9 @@ app.get("/paper-study/export.csv", authorizeBVBEvents, (req, res) => {
   const dateKey = /^\d{4}-\d{2}-\d{2}$/.test(requested) ? requested : studyDateKey(new Date());
   const summary = paperDailySummary(dateKey);
   const q = value => `"${String(value ?? "").replace(/"/g, '""')}"`;
-  const lines = [["date","agent","direction","entry_time_ct","entry_price","exit_time_ct","exit_price","underlying_move","result","exit_reason"]];
+  const lines = [["date","agent","direction","entry_time_ct","entry_price","exit_time_ct","exit_price","underlying_move","result","bias_15m_at_entry","alignment_15m","bias_15m_at_exit","exit_reason"]];
   for (const name of PAPER_AGENT_NAMES) {
-    for (const t of summary[name].tradeLog || []) lines.push([dateKey,name,t.direction,formatPaperTime(t.entryTime),t.entryPrice,formatPaperTime(t.exitTime),t.exitPrice,t.underlyingMove,t.result,t.exitReason]);
+    for (const t of summary[name].tradeLog || []) lines.push([dateKey,name,t.direction,formatPaperTime(t.entryTime),t.entryPrice,formatPaperTime(t.exitTime),t.exitPrice,t.underlyingMove,t.result,t.bias15mAtEntry || "UNKNOWN",t.bias15mAlignment || "NEUTRAL",t.bias15mAtExit || "UNKNOWN",t.exitReason]);
   }
   res.set("content-disposition", `attachment; filename="bvb-paper-results-${dateKey}.csv"`);
   res.type("text/csv").send(lines.map(row => row.map(q).join(",")).join("\n"));
