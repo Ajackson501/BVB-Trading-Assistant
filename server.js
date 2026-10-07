@@ -2586,9 +2586,11 @@ function detectExpansion(candles) {
 
 // ==================================================
 // V1.1 PATTERN #1
-// TAKEOVER NEAR 8/20 SMA
+// TAKEOVER / COLOR CHANGE AT THE 20 SMA
 // ==================================================
-
+// Oliver's color-change rule is location-specific: the takeover must occur
+// near the 20 SMA. The 8 SMA remains part of Oliver's broader trend state and
+// management, but it is not a qualifying location for this setup.
 function detectTakeoverNearSMA(
   candles,
   sma8,
@@ -2598,11 +2600,15 @@ function detectTakeoverNearSMA(
   if (
     !Array.isArray(candles) ||
     candles.length < 2 ||
-    !Number.isFinite(sma8) ||
     !Number.isFinite(sma20)
   ) {
     return null;
   }
+
+  // Keep the established function signature so Original Oliver and
+  // Oliver Live continue sharing the same analyzer. sma8 is intentionally
+  // not used as a location qualifier for this pattern.
+  void sma8;
 
   const previous =
     candles[candles.length - 2];
@@ -2619,13 +2625,6 @@ function detectTakeoverNearSMA(
       0.20
     );
 
-  const near8 =
-    Math.min(
-      Math.abs(Number(current.low) - sma8),
-      Math.abs(Number(current.high) - sma8),
-      Math.abs(price - sma8)
-    ) <= tolerance;
-
   const near20 =
     Math.min(
       Math.abs(Number(current.low) - sma20),
@@ -2633,7 +2632,7 @@ function detectTakeoverNearSMA(
       Math.abs(price - sma20)
     ) <= tolerance;
 
-  if (!near8 && !near20) {
+  if (!near20) {
     return null;
   }
 
@@ -2643,14 +2642,7 @@ function detectTakeoverNearSMA(
       current
     )
   ) {
-
-    return {
-      direction: "BULLISH",
-      near:
-        near20
-          ? "20_SMA"
-          : "8_SMA"
-    };
+    return { direction: "BULLISH", near: "20_SMA" };
   }
 
   if (
@@ -2659,14 +2651,7 @@ function detectTakeoverNearSMA(
       current
     )
   ) {
-
-    return {
-      direction: "BEARISH",
-      near:
-        near20
-          ? "20_SMA"
-          : "8_SMA"
-    };
+    return { direction: "BEARISH", near: "20_SMA" };
   }
 
   return null;
@@ -4037,6 +4022,32 @@ function analyze15MinuteBias(candles) {
   };
 }
 
+function simpleShortBroadContext(shortDirection, immediateControl, bias15m) {
+  const bias = bias15m?.bias || "BUILDING";
+
+  if (bias === "BEARISH") {
+    if (shortDirection === "CALL") return "Short-term move up — broader trend down.";
+    if (shortDirection === "PUT") return "Short-term move down — broader trend still bearish.";
+    if (immediateControl === "BULLS") return "Buyers gaining — broader trend still bearish.";
+    return "Broader trend still bearish.";
+  }
+
+  if (bias === "BULLISH") {
+    if (shortDirection === "PUT") return "Short-term move down — broader trend up.";
+    if (shortDirection === "CALL") return "Short-term move up — broader trend still bullish.";
+    if (immediateControl === "BEARS") return "Sellers gaining — broader trend still bullish.";
+    return "Broader trend still bullish.";
+  }
+
+  if (bias === "TRANSITION") {
+    if (shortDirection === "CALL" || immediateControl === "BULLS") return "Short-term move up — broader trend changing.";
+    if (shortDirection === "PUT" || immediateControl === "BEARS") return "Short-term move down — broader trend changing.";
+    return "Broader trend changing.";
+  }
+
+  return "Broader trend still developing.";
+}
+
 function buildMarketReadV2(battle, bias15m) {
   const bias = bias15m?.bias || "BUILDING";
   const control = battle?.control || "NEUTRAL";
@@ -4059,24 +4070,24 @@ function buildMarketReadV2(battle, bias15m) {
     headline = `${control} still control the 2-minute trend, but the move is weakening.`;
   } else if (action === "CALL_ENTRY_READY") {
     headline = alignment === "WITH 15M BIAS"
-      ? "Potential CALL trend entry. The short-term move agrees with the 15-minute context. Check the trigger and invalidation."
-      : "Potential CALL trend entry. The 15-minute context disagrees or is unconfirmed. Check the trigger and invalidation.";
+      ? "Potential CALL trend entry. Short-term move up — broader trend up. Check the trigger and invalidation."
+      : "Potential CALL trend entry. " + simpleShortBroadContext("CALL", control, bias15m) + " Check the trigger and invalidation.";
   } else if (action === "PUT_ENTRY_READY") {
     headline = alignment === "WITH 15M BIAS"
-      ? "Potential PUT trend entry. The short-term move agrees with the 15-minute context. Check the trigger and invalidation."
-      : "Potential PUT trend entry. The 15-minute context disagrees or is unconfirmed. Check the trigger and invalidation.";
+      ? "Potential PUT trend entry. Short-term move down — broader trend down. Check the trigger and invalidation."
+      : "Potential PUT trend entry. " + simpleShortBroadContext("PUT", control, bias15m) + " Check the trigger and invalidation.";
   } else if (control === "BULLS") {
     headline = alignment === "WITH 15M BIAS"
-      ? `Bulls control the 2-minute trend and are moving with the ${bias.toLowerCase()} 15-minute context.`
+      ? "Short-term move up — broader trend up."
       : alignment === "COUNTER 15M BIAS"
-      ? `Bulls control the 2-minute trend, but the move is against the ${bias.toLowerCase()} 15-minute context.`
-      : "Bulls control the 2-minute trend while the 15-minute context is still developing.";
+      ? simpleShortBroadContext("CALL", control, bias15m)
+      : simpleShortBroadContext("CALL", control, bias15m);
   } else if (control === "BEARS") {
     headline = alignment === "WITH 15M BIAS"
-      ? `Bears control the 2-minute trend and are moving with the ${bias.toLowerCase()} 15-minute context.`
+      ? "Short-term move down — broader trend down."
       : alignment === "COUNTER 15M BIAS"
-      ? `Bears control the 2-minute trend, but the move is against the ${bias.toLowerCase()} 15-minute context.`
-      : "Bears control the 2-minute trend while the 15-minute context is still developing.";
+      ? simpleShortBroadContext("PUT", control, bias15m)
+      : simpleShortBroadContext("PUT", control, bias15m);
   }
 
   return {
@@ -6104,8 +6115,7 @@ function buildDashboardView(now = Date.now()) {
   const marketRead = {
     headline: chopActive ? `Recent candles are overlapping. Last confirmed direction remains ${direction === "CALL" ? "bullish" : direction === "PUT" ? "bearish" : "unconfirmed"}.` :
       direction === "WAIT" ? "Neither side has confirmed control." : `${side} have confirmed control.${c.strength.opposition || c.strength.doji || c.strength.shrinking ? " " + c.strength.status + "." : ""}`,
-    context: bias15m.bias === "BULLISH" ? "15-minute view: broader intraday conditions favor buyers." :
-      bias15m.bias === "BEARISH" ? "15-minute view: broader intraday conditions favor sellers." : "15-minute view: broader intraday conditions are mixed or still developing.",
+    context: simpleShortBroadContext(direction, battle?.control || "NEUTRAL", bias15m),
     note: action.title + ". " + action.detail
   };
   const hasQuote = Number.isFinite(Number(latestGOOGLTrade?.price)) && Number(latestGOOGLTrade?.price) > 0 &&
@@ -6116,7 +6126,7 @@ function buildDashboardView(now = Date.now()) {
     hasClose ? { price:lastClose, source:"CANDLE", time:new Date(Date.parse(candleTime)+120000).toISOString() } :
     { price:null, source:"UNAVAILABLE", time:null };
   return {
-    priceDisplay, version:"3.2.19", regularHours:session.regularHours, session:session.session, fresh,
+    priceDisplay, version:"3.2.20", regularHours:session.regularHours, session:session.session, fresh,
     candleTime, quoteTime:latestGOOGLTrade?.time || null, direction, entrySignal:c.analysis.signal,
     pulseDirection, chopState:chop.state, chopActive, warningPending, strength:c.strength,
     candleControl: c.strength.doji ? "NEUTRAL" : c.strength.color === "GREEN" ? "BULLS" : c.strength.color === "RED" ? "BEARS" : "NEUTRAL",
@@ -7387,7 +7397,7 @@ body.trade-active .pressureSupport { display:none; }
   </div>
 
   <div class="warning" id="warningSummary">${view.warning}</div>
-  <div class="dataStatus" id="dataStatus">V3.2.19 TEST · Waiting for a fresh price</div>
+  <div class="dataStatus" id="dataStatus">V3.2.20 TEST · Waiting for a fresh price</div>
   <a class="researchAccess" href="/research" title="Paper-trading research only">Research<span>Paper trades • For testing only</span></a>
 
 </div>
@@ -7499,7 +7509,7 @@ function renderMarket() {
     display.source === "TRADE" ? (fresh && view.regularHours ? "Live trade price" : "Last received trade price") : "Price unavailable";
   setText("liveHeaderPrice", "GOOGL " + (Number.isFinite(display.price) && display.price > 0 ? dollars(display.price) : "—"));
   setText("priceSource", sourceLabel);
-  setText("dataStatus", "V3.2.19 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
+  setText("dataStatus", "V3.2.20 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
     (view.candleTime ? " · Confirmed candle ended " + timeText(new Date(Date.parse(view.candleTime) + 120000).toISOString()) : ""));
   setText("controlHeadline", view.candleControl === "BULLS" ? "BUYERS LEAD THE LAST COMPLETED CANDLE" :
     view.candleControl === "BEARS" ? "SELLERS LEAD THE LAST COMPLETED CANDLE" : "LAST COMPLETED CANDLE SHOWS INDECISION");
