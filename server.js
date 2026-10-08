@@ -212,15 +212,16 @@ const PAPER_LIVE_TRADE_MAX_AGE_MS = 60 * 1000;
 // completed-candle analysis, first dashboard delivery, and first client render.
 // This does not open another Alpaca connection and does not poll Alpaca.
 const ANALYSIS_TIMING_FILE = process.env.ANALYSIS_TIMING_FILE ||
-  (fs.existsSync("/var/data")
-    ? path.join("/var/data", "bvb-analysis-timing.json")
-    : path.join(__dirname, "bvb-analysis-timing.json"));
+  path.join(path.dirname(path.resolve(PAPER_JOURNAL_FILE)), "bvb-analysis-timing.json");
 const ANALYSIS_TIMING_DEPLOY_SAFE = path.resolve(ANALYSIS_TIMING_FILE).startsWith(RENDER_PERSISTENT_DATA_DIR + path.sep);
 const ANALYSIS_TIMING_MAX_RECORDS = 1000;
 let analysisTimingAudit = {
-  version: "AnalysisTiming-v1", symbol: "GOOGL", timeframe: "2Min", updatedAt: null, records: []
+  version: "AnalysisTiming-v2", symbol: "GOOGL", timeframe: "2Min", updatedAt: null, records: []
 };
 let developingCandleTiming = null;
+const TWO_MINUTE_CANDLE_MS = 2 * 60 * 1000;
+const CANDLE_FINALIZE_GRACE_MS = Math.max(100, Math.min(1000, Number(process.env.CANDLE_FINALIZE_GRACE_MS) || 350));
+let developingCandleFinalizeTimer = null;
 
 const PAPER_STUDY_VERSION = "Oliver-v1.2_vs_OliverLive-v3_vs_AgentB-v1_vs_AgentC-v1_vs_AgentCChopLock-v1_vs_Rider-v1_15MBiasTag-v1";
 const PAPER_AGENT_NAMES = ["Oliver", "OliverLive", "AgentB", "AgentC", "Rider", "AgentCChopLock"];
@@ -286,7 +287,7 @@ function loadAnalysisTimingAudit() {
     const parsed = JSON.parse(fs.readFileSync(ANALYSIS_TIMING_FILE, "utf8"));
     if (Array.isArray(parsed?.records)) {
       analysisTimingAudit = {
-        version: "AnalysisTiming-v1", symbol: "GOOGL", timeframe: "2Min",
+        version: "AnalysisTiming-v2", symbol: "GOOGL", timeframe: "2Min",
         updatedAt: parsed.updatedAt || null, records: parsed.records.slice(-ANALYSIS_TIMING_MAX_RECORDS)
       };
       console.log(`Analysis timing audit loaded from ${ANALYSIS_TIMING_FILE}`);
@@ -333,6 +334,8 @@ function recordCompletedCandleTiming({ candle, timing, rollover, finalizedAt, an
     lastTradeSourceTime:timing.lastTradeSourceTime||null, lastTradeReceivedAt:timing.lastTradeReceivedAt||null,
     tradeCount:Number(timing.tradeCount)||0,
     sourceToServerLastTradeMs:timingMs(timing.lastTradeReceivedAt, timing.lastTradeSourceTime),
+    finalizationTrigger:rollover?.trigger || "ROLLOVER_TRADE",
+    finalizeGraceMs:CANDLE_FINALIZE_GRACE_MS,
     rolloverTradeSourceTime:rollover?.sourceTime || null, rolloverTradeReceivedAt:rollover?.receivedAt || null,
     firstTradeAfterBoundaryMs:timingMs(rollover?.sourceTime, candleEnd),
     rolloverSourceToServerMs:timingMs(rollover?.receivedAt, rollover?.sourceTime),
@@ -1839,6 +1842,38 @@ function updateDevelopingRiderCandles(trade) {
   }
 }
 
+function clearDevelopingCandleFinalizeTimer() {
+  if (developingCandleFinalizeTimer) {
+    clearTimeout(developingCandleFinalizeTimer);
+    developingCandleFinalizeTimer = null;
+  }
+}
+
+function finalizeDevelopingCandle(expectedCandleTime, rollover = null) {
+  if (!developingCandle || developingCandle.time !== expectedCandleTime) return false;
+  const candle = developingCandle;
+  const timing = developingCandleTiming;
+  developingCandle = null;
+  developingCandleTiming = null;
+  clearDevelopingCandleFinalizeTimer();
+  addCompletedCandle(candle, timing, rollover || { trigger: "CLOCK" });
+  console.log(`Completed 2-minute candle (${rollover?.trigger || "CLOCK"}):`, JSON.stringify(candle));
+  return true;
+}
+
+function scheduleDevelopingCandleClockFinalize() {
+  clearDevelopingCandleFinalizeTimer();
+  if (!developingCandle?.time) return;
+  const expectedCandleTime = developingCandle.time;
+  const candleEndMs = Date.parse(expectedCandleTime) + TWO_MINUTE_CANDLE_MS;
+  if (!Number.isFinite(candleEndMs)) return;
+  const targetMs = candleEndMs + CANDLE_FINALIZE_GRACE_MS;
+  const delayMs = Math.max(0, targetMs - Date.now());
+  developingCandleFinalizeTimer = setTimeout(() => {
+    finalizeDevelopingCandle(expectedCandleTime, { trigger: "CLOCK" });
+  }, delayMs);
+}
+
 function updateDevelopingCandle(trade, receivedAt = new Date().toISOString()) {
 
   const price =
@@ -1883,6 +1918,12 @@ function updateDevelopingCandle(trade, receivedAt = new Date().toISOString()) {
   const bucketTime =
     bucket.toISOString();
 
+  const latestCompleted = completedCandles[completedCandles.length - 1];
+  if (!developingCandle && latestCompleted?.time === bucketTime) {
+    console.log(`Late trade ignored for already-finalized 2-minute candle ${bucketTime}`);
+    return;
+  }
+
 
   // ------------------------------------------------
   // NEW 2-MINUTE PERIOD
@@ -1896,21 +1937,10 @@ function updateDevelopingCandle(trade, receivedAt = new Date().toISOString()) {
 
 
     if (developingCandle) {
-
-      addCompletedCandle(
-        developingCandle,
-        developingCandleTiming,
-        { sourceTime:trade.time, receivedAt }
+      finalizeDevelopingCandle(
+        developingCandle.time,
+        { trigger: "ROLLOVER_TRADE", sourceTime:trade.time, receivedAt }
       );
-
-
-      console.log(
-        "Completed 2-minute candle:",
-        JSON.stringify(
-          developingCandle
-        )
-      );
-
     }
 
 
@@ -1933,6 +1963,7 @@ function updateDevelopingCandle(trade, receivedAt = new Date().toISOString()) {
       firstTradeSourceTime:trade.time, firstTradeReceivedAt:receivedAt,
       lastTradeSourceTime:trade.time, lastTradeReceivedAt:receivedAt, tradeCount:1
     };
+    scheduleDevelopingCandleClockFinalize();
 
 
     return;
@@ -6273,7 +6304,7 @@ function buildDashboardView(now = Date.now()) {
     hasClose ? { price:lastClose, source:"CANDLE", time:new Date(Date.parse(candleTime)+120000).toISOString() } :
     { price:null, source:"UNAVAILABLE", time:null };
   return {
-    priceDisplay, version:"3.2.23", regularHours:session.regularHours, session:session.session, fresh,
+    priceDisplay, version:"3.2.24", regularHours:session.regularHours, session:session.session, fresh,
     candleTime, quoteTime:latestGOOGLTrade?.time || null, direction, entrySignal:c.analysis.signal,
     pulseDirection, chopState:chop.state, chopActive, warningPending, strength:c.strength,
     candleControl: c.strength.doji ? "NEUTRAL" : c.strength.color === "GREEN" ? "BULLS" : c.strength.color === "RED" ? "BEARS" : "NEUTRAL",
@@ -7544,7 +7575,7 @@ body.trade-active .pressureSupport { display:none; }
   </div>
 
   <div class="warning" id="warningSummary">${view.warning}</div>
-  <div class="dataStatus" id="dataStatus">V3.2.23 TEST · Waiting for a fresh price</div>
+  <div class="dataStatus" id="dataStatus">V3.2.24 TEST · Waiting for a fresh price</div>
   <a class="researchAccess" href="/research" title="Paper-trading research only">Research<span>Paper trades • For testing only</span></a>
 
 </div>
@@ -7656,7 +7687,7 @@ function renderMarket() {
     display.source === "TRADE" ? (fresh && view.regularHours ? "Live trade price" : "Last received trade price") : "Price unavailable";
   setText("liveHeaderPrice", "GOOGL " + (Number.isFinite(display.price) && display.price > 0 ? dollars(display.price) : "—"));
   setText("priceSource", sourceLabel);
-  setText("dataStatus", "V3.2.23 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
+  setText("dataStatus", "V3.2.24 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
     (view.candleTime ? " · Confirmed candle ended " + timeText(new Date(Date.parse(view.candleTime) + 120000).toISOString()) : ""));
   setText("controlHeadline", view.candleControl === "BULLS" ? "BUYERS LEAD THE LAST COMPLETED CANDLE" :
     view.candleControl === "BEARS" ? "SELLERS LEAD THE LAST COMPLETED CANDLE" : "LAST COMPLETED CANDLE SHOWS INDECISION");
@@ -7931,13 +7962,14 @@ function formatPaperTime(time) {
 }
 
 function formatTimingMs(value) {
-  return Number.isFinite(Number(value)) ? `${Math.round(Number(value))} ms` : "—";
+  if (value === null || value === undefined || value === "") return "Not observed";
+  return Number.isFinite(Number(value)) ? `${Math.round(Number(value))} ms` : "Not observed";
 }
 
 function analysisTimingPersistenceStatus() {
   return {file:ANALYSIS_TIMING_FILE,deploySafe:ANALYSIS_TIMING_DEPLOY_SAFE,message:ANALYSIS_TIMING_DEPLOY_SAFE
-    ? "Persistent timing-audit path detected."
-    : "Local instance timing audit only. Mount /var/data or set ANALYSIS_TIMING_FILE to retain audit history across redeploys."};
+    ? "Persistent timing-audit path detected. Timing history will survive redeploys."
+    : "Local instance timing audit only. Mount a Render Persistent Disk at /var/data to retain audit history across redeploys; the app will then use it automatically."};
 }
 
 app.get("/research-login", (req, res) => {
@@ -8014,12 +8046,12 @@ app.get("/research/timing", authorizeResearchPage, (req, res) => {
   const persistence = analysisTimingPersistenceStatus();
   const rows = records.map(r => {
     const state = r.dashboardState || {};
-    return `<tr><td>${escapeHtml(formatPaperTime(r.candleEnd))}</td><td>$${Number(r.open).toFixed(2)} / $${Number(r.high).toFixed(2)} / $${Number(r.low).toFixed(2)} / $${Number(r.close).toFixed(2)}</td><td>${formatTimingMs(r.sourceToServerLastTradeMs)}</td><td>${formatTimingMs(r.firstTradeAfterBoundaryMs)}</td><td>${formatTimingMs(r.candleFinalizeDelayMs)}</td><td>${formatTimingMs(r.analysisDurationMs)}</td><td>${formatTimingMs(r.dashboardAfterAnalysisMs)}</td><td>${formatTimingMs(r.screenAfterAnalysisMs)}</td><td>${escapeHtml(state.direction || r.battle?.control || "—")}</td><td>${escapeHtml(state.chopState || "—")}</td><td>${escapeHtml(state.actionTitle || r.battle?.action || "—")}</td></tr>`;
+    return `<tr><td>${escapeHtml(formatPaperTime(r.candleEnd))}</td><td>$${Number(r.open).toFixed(2)} / $${Number(r.high).toFixed(2)} / $${Number(r.low).toFixed(2)} / $${Number(r.close).toFixed(2)}</td><td>${formatTimingMs(r.sourceToServerLastTradeMs)}</td><td>${escapeHtml(r.finalizationTrigger || "—")}</td><td>${formatTimingMs(r.firstTradeAfterBoundaryMs)}</td><td>${formatTimingMs(r.candleFinalizeDelayMs)}</td><td>${formatTimingMs(r.analysisDurationMs)}</td><td>${formatTimingMs(r.dashboardAfterAnalysisMs)}</td><td>${formatTimingMs(r.screenAfterAnalysisMs)}</td><td>${escapeHtml(state.direction || r.battle?.control || "—")}</td><td>${escapeHtml(state.chopState || "—")}</td><td>${escapeHtml(state.actionTitle || r.battle?.action || "—")}</td></tr>`;
   }).join("");
   const options = [...new Set([dateKey, ...analysisTimingAudit.records.map(r => studyDateKey(r.candleTime)).filter(Boolean)])].sort().reverse()
     .map(d => `<option value="${d}"${d===dateKey?" selected":""}>${d}</option>`).join("");
   res.type("html").send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>BVB Analysis Timing</title><style>
-    body{font-family:system-ui,-apple-system,sans-serif;background:#080c12;color:#e9eef5;margin:0;padding:18px}.wrap{max-width:1250px;margin:auto}h1{font-size:24px;margin:0 0 2px}.sub,.note{color:#9eabbc;font-size:12px}.bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:14px 0}select,a.btn{background:#121923;color:#e9eef5;border:1px solid #344152;border-radius:8px;padding:8px 10px;text-decoration:none;font-size:13px}.notice{border:1px solid ${persistence.deploySafe?"#315c48":"#7a5b25"};background:${persistence.deploySafe?"#10241c":"#2a2111"};padding:10px;border-radius:9px;font-size:12px;margin:10px 0 16px}.scroll{overflow-x:auto}table{width:100%;border-collapse:collapse;background:#0e141d;border:1px solid #283342}th,td{padding:7px;border-bottom:1px solid #202a37;text-align:left;font-size:11px;white-space:nowrap}th{color:#aeb9c8;background:#121a25}@media(max-width:700px){body{padding:10px}th,td{padding:6px;font-size:10px}}</style></head><body><div class="wrap"><h1>Analysis Timing</h1><div class="sub">GOOGL 2-minute audit • existing Alpaca stream only • no extra market-data connection or polling</div><div class="bar"><form method="get"><select name="date" onchange="this.form.submit()">${options}</select></form><a class="btn" href="/analysis-timing/export.csv?date=${encodeURIComponent(dateKey)}">Export Timing CSV</a><a class="btn" href="/research?date=${encodeURIComponent(dateKey)}">Paper Results</a><a class="btn" href="/oliver-dashboard">Dashboard</a></div><div class="notice"><b>Timing journal:</b> ${escapeHtml(persistence.message)}<br>${escapeHtml(persistence.file)}</div><div class="note">Source→server compares Alpaca trade timestamps with server receipt time. First trade after boundary shows how long the market stream waited for the next GOOGL trade; finalize delay shows the total time until the app finalized the prior candle. Screen delay is measured on the server when the iPad/browser reports its first render for that candle. Historical seed bars are excluded.</div><div class="scroll"><table><thead><tr><th>Candle ended</th><th>O / H / L / C</th><th>Source→server</th><th>First trade after boundary</th><th>Finalize delay</th><th>Analysis</th><th>API after analysis</th><th>Screen after analysis</th><th>Direction</th><th>Chop</th><th>Action</th></tr></thead><tbody>${rows || '<tr><td colspan="11">No live timing records for this date yet.</td></tr>'}</tbody></table></div></div></body></html>`);
+    body{font-family:system-ui,-apple-system,sans-serif;background:#080c12;color:#e9eef5;margin:0;padding:18px}.wrap{max-width:1250px;margin:auto}h1{font-size:24px;margin:0 0 2px}.sub,.note{color:#9eabbc;font-size:12px}.bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:14px 0}select,a.btn{background:#121923;color:#e9eef5;border:1px solid #344152;border-radius:8px;padding:8px 10px;text-decoration:none;font-size:13px}.notice{border:1px solid ${persistence.deploySafe?"#315c48":"#7a5b25"};background:${persistence.deploySafe?"#10241c":"#2a2111"};padding:10px;border-radius:9px;font-size:12px;margin:10px 0 16px}.scroll{overflow-x:auto}table{width:100%;border-collapse:collapse;background:#0e141d;border:1px solid #283342}th,td{padding:7px;border-bottom:1px solid #202a37;text-align:left;font-size:11px;white-space:nowrap}th{color:#aeb9c8;background:#121a25}@media(max-width:700px){body{padding:10px}th,td{padding:6px;font-size:10px}}</style></head><body><div class="wrap"><h1>Analysis Timing</h1><div class="sub">GOOGL 2-minute audit • existing Alpaca stream only • no extra market-data connection or polling</div><div class="bar"><form method="get"><select name="date" onchange="this.form.submit()">${options}</select></form><a class="btn" href="/analysis-timing/export.csv?date=${encodeURIComponent(dateKey)}">Export Timing CSV</a><a class="btn" href="/research?date=${encodeURIComponent(dateKey)}">Paper Results</a><a class="btn" href="/oliver-dashboard">Dashboard</a></div><div class="notice"><b>Timing journal:</b> ${escapeHtml(persistence.message)}<br>${escapeHtml(persistence.file)}</div><div class="note">Source→server compares Alpaca trade timestamps with server receipt time. Completed 2-minute candles now finalize no later than the clock boundary plus the configured grace period (${CANDLE_FINALIZE_GRACE_MS} ms); if the first trade of the next bucket arrives sooner, that rollover can finalize the prior candle earlier. “Not observed” means no dashboard/API or browser-render acknowledgement was recorded for that candle. Historical seed bars are excluded.</div><div class="scroll"><table><thead><tr><th>Candle ended</th><th>O / H / L / C</th><th>Source→server</th><th>Finalized by</th><th>First trade after boundary</th><th>Finalize delay</th><th>Analysis</th><th>API after analysis</th><th>Screen after analysis</th><th>Direction</th><th>Chop</th><th>Action</th></tr></thead><tbody>${rows || '<tr><td colspan="12">No live timing records for this date yet.</td></tr>'}</tbody></table></div></div></body></html>`);
 });
 
 app.get("/analysis-timing/export.csv", authorizeBVBEvents, (req, res) => {
@@ -8027,10 +8059,10 @@ app.get("/analysis-timing/export.csv", authorizeBVBEvents, (req, res) => {
   const dateKey = /^\d{4}-\d{2}-\d{2}$/.test(requested) ? requested : studyDateKey(new Date());
   const records = analysisTimingRecordsForDate(dateKey);
   const q = value => `"${String(value ?? "").replace(/"/g, '""')}"`;
-  const lines = [["date","candle_start","candle_end","open","high","low","close","trade_count","last_trade_source","last_trade_server_received","source_to_server_ms","rollover_trade_source","rollover_trade_server_received","first_trade_after_boundary_ms","rollover_source_to_server_ms","finalized_at","candle_finalize_delay_ms","analysis_started_at","analysis_finished_at","analysis_duration_ms","first_dashboard_served_at","dashboard_after_analysis_ms","first_client_render_server_received_at","client_reported_rendered_at","screen_after_analysis_ms","direction","candle_control","chop_state","action","risk_stage","entry_signal"]];
+  const lines = [["date","candle_start","candle_end","open","high","low","close","trade_count","last_trade_source","last_trade_server_received","source_to_server_ms","finalization_trigger","finalize_grace_ms","rollover_trade_source","rollover_trade_server_received","first_trade_after_boundary_ms","rollover_source_to_server_ms","finalized_at","candle_finalize_delay_ms","analysis_started_at","analysis_finished_at","analysis_duration_ms","first_dashboard_served_at","dashboard_after_analysis_ms","first_client_render_server_received_at","client_reported_rendered_at","screen_after_analysis_ms","direction","candle_control","chop_state","action","risk_stage","entry_signal"]];
   for (const r of records) {
     const d = r.dashboardState || {};
-    lines.push([dateKey,r.candleTime,r.candleEnd,r.open,r.high,r.low,r.close,r.tradeCount,r.lastTradeSourceTime,r.lastTradeReceivedAt,r.sourceToServerLastTradeMs,r.rolloverTradeSourceTime,r.rolloverTradeReceivedAt,r.firstTradeAfterBoundaryMs,r.rolloverSourceToServerMs,r.finalizedAt,r.candleFinalizeDelayMs,r.analysisStartedAt,r.analysisFinishedAt,r.analysisDurationMs,r.firstDashboardServedAt,r.dashboardAfterAnalysisMs,r.firstClientRenderReceivedAt,r.clientReportedRenderedAt,r.screenAfterAnalysisMs,d.direction,d.candleControl,d.chopState,d.actionTitle,d.riskStage,d.entrySignal]);
+    lines.push([dateKey,r.candleTime,r.candleEnd,r.open,r.high,r.low,r.close,r.tradeCount,r.lastTradeSourceTime,r.lastTradeReceivedAt,r.sourceToServerLastTradeMs,r.finalizationTrigger,r.finalizeGraceMs,r.rolloverTradeSourceTime,r.rolloverTradeReceivedAt,r.firstTradeAfterBoundaryMs,r.rolloverSourceToServerMs,r.finalizedAt,r.candleFinalizeDelayMs,r.analysisStartedAt,r.analysisFinishedAt,r.analysisDurationMs,r.firstDashboardServedAt,r.dashboardAfterAnalysisMs,r.firstClientRenderReceivedAt,r.clientReportedRenderedAt,r.screenAfterAnalysisMs,d.direction,d.candleControl,d.chopState,d.actionTitle,d.riskStage,d.entrySignal]);
   }
   res.set("content-disposition", `attachment; filename="bvb-analysis-timing-${dateKey}.csv"`);
   res.type("text/csv").send(lines.map(row => row.map(q).join(",")).join("\n"));
