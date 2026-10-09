@@ -996,7 +996,7 @@ function runOliverLiveCompletedPaperTrader(candles) {
   const candle = candles[candles.length - 1];
   if (!regularSessionForCandle(candle)) return;
   const agent = paperStudy.agents.OliverLive;
-  const analysis = analyzeOliver(candles);
+  const analysis = analyzeOliverLiveBase(candles);
 
   if (agent.position) {
     updatePaperExcursion(agent.position, candle);
@@ -2835,6 +2835,97 @@ function detectTakeoverNearSMA(
   return null;
 }
 
+// ==================================================
+// ORIGINAL OLIVER BASELINE (restored from V3.2.19)
+// TAKEOVER / COLOR CHANGE NEAR 8 OR 20 SMA
+// ==================================================
+// Original Oliver keeps the pre-Oct-7 location logic: a qualifying regular-
+// candle takeover may occur near either the 8 SMA or the 20 SMA. Oliver Live
+// remains on the newer 20-SMA live-break experiment and does not use this helper.
+function detectTakeoverNearSMAOriginal(
+  candles,
+  sma8,
+  sma20
+) {
+
+  if (
+    !Array.isArray(candles) ||
+    candles.length < 2 ||
+    !Number.isFinite(sma8) ||
+    !Number.isFinite(sma20)
+  ) {
+    return null;
+  }
+
+  const previous =
+    candles[candles.length - 2];
+
+  const current =
+    candles[candles.length - 1];
+
+  const price =
+    Number(current.close);
+
+  const tolerance =
+    Math.max(
+      price * 0.0025,
+      0.20
+    );
+
+  const near8 =
+    Math.min(
+      Math.abs(Number(current.low) - sma8),
+      Math.abs(Number(current.high) - sma8),
+      Math.abs(price - sma8)
+    ) <= tolerance;
+
+  const near20 =
+    Math.min(
+      Math.abs(Number(current.low) - sma20),
+      Math.abs(Number(current.high) - sma20),
+      Math.abs(price - sma20)
+    ) <= tolerance;
+
+  if (!near8 && !near20) {
+    return null;
+  }
+
+  if (
+    isBullishTakeover(
+      previous,
+      current
+    )
+  ) {
+
+    return {
+      direction: "BULLISH",
+      near:
+        near20
+          ? "20_SMA"
+          : "8_SMA"
+    };
+  }
+
+  if (
+    isBearishTakeover(
+      previous,
+      current
+    )
+  ) {
+
+    return {
+      direction: "BEARISH",
+      near:
+        near20
+          ? "20_SMA"
+          : "8_SMA"
+    };
+  }
+
+  return null;
+}
+
+
 
 // ==================================================
 // V1.1 PATTERN #2
@@ -3011,6 +3102,624 @@ function detectReversalBreak(
 // Restores full 200 SMA regime authorization
 // ==================================================
 function analyzeOliver(candles) {
+  if (
+    !Array.isArray(candles) ||
+    candles.length < 200
+  ) {
+    return {
+      action: "WAIT",
+      reason:
+        "Need at least 200 completed candles for Oliver's 200 SMA.",
+      sma200Status: "BUILDING",
+      completedCandles:
+        Array.isArray(candles)
+          ? candles.length
+          : 0,
+      candlesNeeded:
+        Math.max(
+          0,
+          200 -
+            (Array.isArray(candles)
+              ? candles.length
+              : 0)
+        )
+    };
+  }
+
+  const current =
+    candles[candles.length - 1];
+
+  const previous =
+    candles[candles.length - 2];
+
+  const price =
+    Number(current.close);
+
+  // ------------------------------------------------
+  // MOVING AVERAGES
+  // ------------------------------------------------
+  const sma8 =
+    calculateSMA(candles, 8);
+
+  const sma20 =
+    calculateSMA(candles, 20);
+
+  const sma200 =
+    calculateSMA(candles, 200);
+
+  const previousSMA8 =
+    calculatePreviousSMA(
+      candles,
+      8
+    );
+
+  const previousSMA20 =
+    calculatePreviousSMA(
+      candles,
+      20
+    );
+
+  // 201 candles are required to determine
+  // the direction/slope of the 200 SMA.
+  const previousSMA200 =
+    candles.length >= 201
+      ? calculatePreviousSMA(
+          candles,
+          200
+        )
+      : null;
+
+  const directionOf =
+    (
+      currentValue,
+      previousValue
+    ) => {
+      if (
+        !Number.isFinite(
+          currentValue
+        ) ||
+        !Number.isFinite(
+          previousValue
+        )
+      ) {
+        return "UNAVAILABLE";
+      }
+
+      if (
+        currentValue >
+        previousValue
+      ) {
+        return "RISING";
+      }
+
+      if (
+        currentValue <
+        previousValue
+      ) {
+        return "FALLING";
+      }
+
+      return "FLAT";
+    };
+
+  const sma8Direction =
+    directionOf(
+      sma8,
+      previousSMA8
+    );
+
+  const sma20Direction =
+    directionOf(
+      sma20,
+      previousSMA20
+    );
+
+  const sma200Direction =
+    directionOf(
+      sma200,
+      previousSMA200
+    );
+
+  // ------------------------------------------------
+  // SHORT-TERM 8/20 STATE
+  // ------------------------------------------------
+  let state = "MIXED";
+
+  if (
+    price > sma8 &&
+    sma8 > sma20 &&
+    sma8Direction === "RISING" &&
+    sma20Direction === "RISING"
+  ) {
+    state = "BULLISH";
+  }
+
+  if (
+    price < sma8 &&
+    sma8 < sma20 &&
+    sma8Direction === "FALLING" &&
+    sma20Direction === "FALLING"
+  ) {
+    state = "BEARISH";
+  }
+
+  // ------------------------------------------------
+  // 200 SMA POSITION
+  // ------------------------------------------------
+  let sma200Context =
+    "AT_200";
+
+  if (price > sma200) {
+    sma200Context =
+      "ABOVE_200";
+  } else if (price < sma200) {
+    sma200Context =
+      "BELOW_200";
+  }
+
+  // ------------------------------------------------
+  // OLIVER 200 SMA REGIME
+  //
+  // Above + rising = bullish regime
+  // Below + falling = bearish regime
+  // Everything else = transition/neutral
+  // ------------------------------------------------
+  let regime =
+    "TRANSITION";
+
+  if (
+    price > sma200 &&
+    sma200Direction === "RISING"
+  ) {
+    regime =
+      "BULLISH_REGIME";
+  }
+
+  if (
+    price < sma200 &&
+    sma200Direction === "FALLING"
+  ) {
+    regime =
+      "BEARISH_REGIME";
+  }
+
+  if (
+    sma200Direction ===
+      "UNAVAILABLE"
+  ) {
+    regime =
+      "REGIME_BUILDING";
+  }
+
+  // ------------------------------------------------
+  // 200 ALIGNMENT
+  // ------------------------------------------------
+  let sma200Alignment =
+    "NEUTRAL";
+
+  if (
+    state === "BULLISH" &&
+    regime === "BULLISH_REGIME"
+  ) {
+    sma200Alignment =
+      "ALIGNED";
+  }
+
+  if (
+    state === "BEARISH" &&
+    regime === "BEARISH_REGIME"
+  ) {
+    sma200Alignment =
+      "ALIGNED";
+  }
+
+  if (
+    state === "BULLISH" &&
+    regime === "BEARISH_REGIME"
+  ) {
+    sma200Alignment =
+      "COUNTER_TREND";
+  }
+
+  if (
+    state === "BEARISH" &&
+    regime === "BULLISH_REGIME"
+  ) {
+    sma200Alignment =
+      "COUNTER_TREND";
+  }
+
+  // ------------------------------------------------
+  // STANDARD OLIVER CONDITIONS
+  // ------------------------------------------------
+  const structure =
+    detectStructure(candles);
+
+  const bullishTakeover =
+    isBullishTakeover(
+      previous,
+      current
+    );
+
+  const bearishTakeover =
+    isBearishTakeover(
+      previous,
+      current
+    );
+
+  const expansion =
+    detectExpansion(candles);
+
+  // ------------------------------------------------
+  // EXPERIMENTAL ENTRY RECOGNITION
+  // ------------------------------------------------
+  const takeoverNearSMA =
+    detectTakeoverNearSMAOriginal(
+      candles,
+      sma8,
+      sma20
+    );
+
+  const compressionExpansion =
+    detectCompressionExpansion(
+      candles
+    );
+
+  const reversalBreak =
+    detectReversalBreak(
+      candles
+    );
+
+  // ------------------------------------------------
+  // LOCATION
+  // ------------------------------------------------
+  const distanceFrom8 =
+    Math.abs(
+      price - sma8
+    );
+
+  const distanceFrom20 =
+    Math.abs(
+      price - sma20
+    );
+
+  const distanceFrom200 =
+    Math.abs(
+      price - sma200
+    );
+
+  let nearestSMA =
+    "8_SMA";
+
+  let nearestDistance =
+    distanceFrom8;
+
+  if (
+    distanceFrom20 <
+    nearestDistance
+  ) {
+    nearestSMA =
+      "20_SMA";
+    nearestDistance =
+      distanceFrom20;
+  }
+
+  if (
+    distanceFrom200 <
+    nearestDistance
+  ) {
+    nearestSMA =
+      "200_SMA";
+  }
+
+  // ------------------------------------------------
+  // EVIDENCE CHECKS
+  // ------------------------------------------------
+  let bullishChecks = 0;
+  let bearishChecks = 0;
+
+  if (state === "BULLISH") {
+    bullishChecks++;
+  }
+
+  if (state === "BEARISH") {
+    bearishChecks++;
+  }
+
+  if (structure === "HH_HL") {
+    bullishChecks++;
+  }
+
+  if (structure === "LH_LL") {
+    bearishChecks++;
+  }
+
+  if (bullishTakeover) {
+    bullishChecks++;
+  }
+
+  if (bearishTakeover) {
+    bearishChecks++;
+  }
+
+  if (expansion === "GREEN") {
+    bullishChecks++;
+  }
+
+  if (expansion === "RED") {
+    bearishChecks++;
+  }
+
+  // 200 regime is fundamental,
+  // not merely price above/below the line.
+  if (
+    regime === "BULLISH_REGIME"
+  ) {
+    bullishChecks++;
+  }
+
+  if (
+    regime === "BEARISH_REGIME"
+  ) {
+    bearishChecks++;
+  }
+
+  // Experimental early-entry patterns.
+  if (
+    takeoverNearSMA?.direction ===
+      "BULLISH"
+  ) {
+    bullishChecks += 2;
+  }
+
+  if (
+    takeoverNearSMA?.direction ===
+      "BEARISH"
+  ) {
+    bearishChecks += 2;
+  }
+
+  if (
+    compressionExpansion ===
+      "BULLISH"
+  ) {
+    bullishChecks += 2;
+  }
+
+  if (
+    compressionExpansion ===
+      "BEARISH"
+  ) {
+    bearishChecks += 2;
+  }
+
+  if (
+    reversalBreak?.direction ===
+      "BULLISH"
+  ) {
+    bullishChecks += 2;
+  }
+
+  if (
+    reversalBreak?.direction ===
+      "BEARISH"
+  ) {
+    bearishChecks += 2;
+  }
+
+  // ------------------------------------------------
+  // ENTRY EVENT
+  // ------------------------------------------------
+  let entryEvent =
+    "NONE";
+
+  if (takeoverNearSMA) {
+    entryEvent =
+      `${takeoverNearSMA.direction}_TAKEOVER_NEAR_${takeoverNearSMA.near}`;
+  }
+
+  if (compressionExpansion) {
+    entryEvent =
+      `${compressionExpansion}_COMPRESSION_EXPANSION`;
+  }
+
+  if (reversalBreak) {
+    entryEvent =
+      `${reversalBreak.direction}_REVERSAL_BREAK`;
+  }
+
+  const bullishEntryEvent =
+    takeoverNearSMA?.direction ===
+      "BULLISH" ||
+    compressionExpansion ===
+      "BULLISH" ||
+    reversalBreak?.direction ===
+      "BULLISH";
+
+  const bearishEntryEvent =
+    takeoverNearSMA?.direction ===
+      "BEARISH" ||
+    compressionExpansion ===
+      "BEARISH" ||
+    reversalBreak?.direction ===
+      "BEARISH";
+
+  // ------------------------------------------------
+  // REGIME AUTHORIZATION
+  // ------------------------------------------------
+  const bullishAuthorized =
+    regime === "BULLISH_REGIME";
+
+  const bearishAuthorized =
+    regime === "BEARISH_REGIME";
+
+  // ------------------------------------------------
+  // ACTION
+  // ------------------------------------------------
+  let action = "WAIT";
+
+  let reason =
+    "No confirmed Oliver entry event.";
+
+  if (
+    bullishEntryEvent &&
+    bullishChecks >= 3 &&
+    bullishChecks >
+      bearishChecks
+  ) {
+    if (bullishAuthorized) {
+      action =
+        "CALL_SETUP";
+
+      reason =
+        "Bullish Oliver event confirmed inside an authorized bullish 200 SMA regime.";
+    } else {
+      action =
+        "ARMED";
+
+      reason =
+        "Bullish event detected, but the 200 SMA regime does not yet authorize the CALL setup.";
+    }
+  }
+
+  if (
+    bearishEntryEvent &&
+    bearishChecks >= 3 &&
+    bearishChecks >
+      bullishChecks
+  ) {
+    if (bearishAuthorized) {
+      action =
+        "PUT_SETUP";
+
+      reason =
+        "Bearish Oliver event confirmed inside an authorized bearish 200 SMA regime.";
+    } else {
+      action =
+        "ARMED";
+
+      reason =
+        "Bearish event detected, but the 200 SMA regime does not yet authorize the PUT setup.";
+    };
+  }
+
+  // ------------------------------------------------
+  // TRIGGER / INVALIDATION
+  // ------------------------------------------------
+  let trigger = null;
+  let invalidation = null;
+
+  if (
+    action === "CALL_SETUP"
+  ) {
+    trigger =
+      Number(current.high);
+
+    invalidation =
+      Number(current.low);
+  }
+
+  if (
+    action === "PUT_SETUP"
+  ) {
+    trigger =
+      Number(current.low);
+
+    invalidation =
+      Number(current.high);
+  }
+
+  // ------------------------------------------------
+  // SETUP QUALITY
+  // ------------------------------------------------
+  let setupQuality = "C";
+
+  if (
+    action === "CALL_SETUP" ||
+    action === "PUT_SETUP"
+  ) {
+    setupQuality =
+      "A";
+  } else if (
+    action === "ARMED"
+  ) {
+    setupQuality =
+      "B";
+  }
+
+  // ------------------------------------------------
+  // RESULT
+  // ------------------------------------------------
+  return {
+    action,
+    reason,
+
+    setupQuality,
+
+    state,
+    regime,
+
+    bullishAuthorized,
+    bearishAuthorized,
+
+    price:
+      Number(
+        price.toFixed(4)
+      ),
+
+    sma8:
+      Number(
+        sma8.toFixed(4)
+      ),
+
+    sma20:
+      Number(
+        sma20.toFixed(4)
+      ),
+
+    sma200:
+      Number(
+        sma200.toFixed(4)
+      ),
+
+    sma200Status:
+      candles.length >= 201
+        ? "LIVE_WITH_SLOPE"
+        : "LIVE_WAITING_FOR_SLOPE",
+
+    sma8Direction,
+    sma20Direction,
+    sma200Direction,
+
+    sma200Context,
+    sma200Alignment,
+
+    structure,
+    nearestSMA,
+
+    bullishTakeover,
+    bearishTakeover,
+    expansion,
+
+    takeoverNearSMA,
+    compressionExpansion,
+    reversalBreak,
+
+    entryEvent,
+
+    bullishChecks,
+    bearishChecks,
+
+    trigger,
+    invalidation,
+
+    analyzedCandle:
+      current.time
+  };
+}
+
+// Oliver Live keeps the V3.2.24 completed-candle analyzer behavior for comparison.
+function analyzeOliverLiveBase(candles) {
   if (
     !Array.isArray(candles) ||
     candles.length < 200
@@ -6304,7 +7013,7 @@ function buildDashboardView(now = Date.now()) {
     hasClose ? { price:lastClose, source:"CANDLE", time:new Date(Date.parse(candleTime)+120000).toISOString() } :
     { price:null, source:"UNAVAILABLE", time:null };
   return {
-    priceDisplay, version:"3.2.24", regularHours:session.regularHours, session:session.session, fresh,
+    priceDisplay, version:"3.2.25", regularHours:session.regularHours, session:session.session, fresh,
     candleTime, quoteTime:latestGOOGLTrade?.time || null, direction, entrySignal:c.analysis.signal,
     pulseDirection, chopState:chop.state, chopActive, warningPending, strength:c.strength,
     candleControl: c.strength.doji ? "NEUTRAL" : c.strength.color === "GREEN" ? "BULLS" : c.strength.color === "RED" ? "BEARS" : "NEUTRAL",
@@ -7575,7 +8284,7 @@ body.trade-active .pressureSupport { display:none; }
   </div>
 
   <div class="warning" id="warningSummary">${view.warning}</div>
-  <div class="dataStatus" id="dataStatus">V3.2.24 TEST · Waiting for a fresh price</div>
+  <div class="dataStatus" id="dataStatus">V3.2.25 TEST · Waiting for a fresh price</div>
   <a class="researchAccess" href="/research" title="Paper-trading research only">Research<span>Paper trades • For testing only</span></a>
 
 </div>
@@ -7687,7 +8396,7 @@ function renderMarket() {
     display.source === "TRADE" ? (fresh && view.regularHours ? "Live trade price" : "Last received trade price") : "Price unavailable";
   setText("liveHeaderPrice", "GOOGL " + (Number.isFinite(display.price) && display.price > 0 ? dollars(display.price) : "—"));
   setText("priceSource", sourceLabel);
-  setText("dataStatus", "V3.2.24 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
+  setText("dataStatus", "V3.2.25 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
     (view.candleTime ? " · Confirmed candle ended " + timeText(new Date(Date.parse(view.candleTime) + 120000).toISOString()) : ""));
   setText("controlHeadline", view.candleControl === "BULLS" ? "BUYERS LEAD THE LAST COMPLETED CANDLE" :
     view.candleControl === "BEARS" ? "SELLERS LEAD THE LAST COMPLETED CANDLE" : "LAST COMPLETED CANDLE SHOWS INDECISION");
@@ -8098,6 +8807,7 @@ app.get("/paper-study", authorizeBVBEvents, (req, res) => {
     symbol: paperStudy.symbol,
     timeframe: paperStudy.timeframe,
     strategyNotes: {
+      Oliver: "Restored V3.2.19 Original Oliver baseline: completed regular 2-minute candles; 8/20/200 regime/state, takeover/color-change near either the 8 or 20 SMA, compression-to-expansion, reversal-cluster break, structure/location checks, and completed-candle entry/invalidation management.",
       OliverLive: "Paper-only Oliver variant: for the 20-SMA color-change setup, a completed opposing pullback candle near the 20 arms its high/low immediately and the existing GOOGL live trade stream enters on the break without waiting for the takeover candle to close. Before entry, the pullback candle invalidates a failed setup; after entry, the stop is frozen at the developing entry candle low for CALL or high for PUT at the instant the trigger fires. Other Oliver events retain completed-candle setup recognition. Opposite setups and 200-SMA regime loss remain completed-candle confirmations.",
       AgentB: "Momentum Trader paper study: 2-minute structure, 5-minute confirmation, 8/20/200 alignment, accomplished breakout/continuation, named momentum events, support/resistance, no chasing, and fast invalidation. Uncertainty defaults to WAIT.",
       AgentC: "Unchanged Agent C v1 baseline; existing history preserved.",
