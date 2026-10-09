@@ -7187,6 +7187,8 @@ const view = buildDashboardView();
 const aiRead = view.marketRead;
 const hold = view.hold;
 const ropePercent = Math.max(36, Math.min(64, 50 + Number(battle.ropePosition || 0) * 0.28));
+const ropeMarkerScore = Number(battle.ropePosition || 0);
+const ropeMarkerClass = ropeMarkerScore < -1 ? "bear-control" : ropeMarkerScore > 1 ? "bull-control" : "neutral-control";
 const battleControl = view.candleControl;
 const battlePressure = battle.pressure || "WAITING";
 const dashboardStrength = view.strength.status;
@@ -7448,17 +7450,17 @@ body {
 .knot {
   position: absolute;
   left: ${ropePercent}%;
-  top: calc(50% - 19px);
+  top: calc(50% - 15px);
 
-  width: 38px;
-  height: 38px;
+  width: 30px;
+  height: 30px;
 
   transform: translateX(-50%);
 
   border-radius: 50%;
 
   background: #f3c969;
-  border: 5px solid #ffffff;
+  border: 4px solid #ffffff;
 
   box-shadow:
     0 0 12px rgba(255,255,255,.35);
@@ -7468,6 +7470,22 @@ body {
     left 0.8s ease;
 }
 
+.knot.bear-control { background: #f05a6c; box-shadow: 0 0 11px rgba(240,90,108,.45); }
+.knot.bull-control { background: #36cf88; box-shadow: 0 0 11px rgba(54,207,136,.45); }
+.knot.neutral-control { background: #f3c969; }
+.knot::after {
+  content: "TREND CONTROL";
+  position: absolute;
+  top: calc(100% + 7px);
+  left: 50%;
+  transform: translateX(-50%);
+  color: #e0e5ed;
+  font: 700 9px system-ui, sans-serif;
+  letter-spacing: .055em;
+  white-space: nowrap;
+  text-shadow: 0 1px 4px #070c15;
+  pointer-events: none;
+}
 /* -------------------------
    ACTION
 ------------------------- */
@@ -7737,6 +7755,13 @@ and (max-height: 700px) {
 .ropeArea.op-call-ready .tug-bull img,.ropeArea.op-put-ready .tug-bear img { animation-duration:1.15s; }
 .ropeArea.op-wait .tug-character img { animation-duration:3.8s; }
 .ropeArea.op-wait .rope {opacity:.6}
+/* V3.2.33: a single prominent trade cue; secondary center/entry marker remains legible. */
+.ropeArea .opportunityCue { top: 3px; font-weight: 850; z-index: 13; }
+.ropeArea .centerLabel { top: 34px; z-index: 11; font-size: 10px; letter-spacing: .07em; background: rgba(9,15,25,.82); padding: 1px 5px; border-radius: 4px; white-space: nowrap; }
+.ropeArea .knot::after { font-size: 8px; top: calc(100% + 4px); }
+.ropeArea.op-data-delayed .opportunityCue { color: #ffcf73; border-color: #d3a24c; }
+.ropeArea.op-wait .tug-character img { animation-duration: 3.8s; }
+/* Existing trade markers and position readouts remain unchanged. */
 /* Keep the full readout visible in one responsive dashboard. */
 body { padding: clamp(8px, 1.3vw, 16px); }
 .dashboard {
@@ -7807,7 +7832,7 @@ body { padding: clamp(8px, 1.3vw, 16px); }
   .tug-character { width: min(43%, 40vh); }
   .rope { left: min(40%, 36vh); right: min(40%, 36vh); }
   .entryText { font-size: 8px; padding: 4px 5px; }
-  .knot { width: 28px; height: 28px; top: calc(50% - 14px); border-width: 4px; }
+  .knot { width: 23px; height: 23px; top: calc(50% - 11.5px); border-width: 3px; }
   .actionBox { padding: 7px; }
   .action { font-size: 17px; }
   .phase { font-size: 10px; }
@@ -7847,7 +7872,7 @@ body { padding: clamp(8px, 1.3vw, 16px); }
   .tug-character { width: min(43%, 40vh); }
   .rope { left: min(40%, 36vh); right: min(40%, 36vh); }
   .entryText { font-size: 8px; padding: 3px 4px; }
-  .knot { width: 26px; height: 26px; top: calc(50% - 13px); border-width: 4px; }
+  .knot { width: 21px; height: 21px; top: calc(50% - 10.5px); border-width: 3px; }
   .actionBox { padding: 6px; }
   .action { font-size: 16px; }
   .phase { font-size: 10px; }
@@ -8230,7 +8255,7 @@ body.trade-active .pressureSupport { display:none; }
       <div class="centerLabel" id="mainCenterLabel">NEUTRAL</div>
       <div class="rope"></div>
       <div class="centerLine"></div>
-      <div class="knot" id="battleKnot"></div>
+      <div class="knot ${ropeMarkerClass}" id="battleKnot" aria-label="Trend control marker"></div>
       <div class="positionBest" id="positionBest" hidden><span>BEST</span></div>
       <div class="positionCurrent" id="positionCurrent" hidden><span>CURRENT</span></div>
       <div class="positionGiveback" id="positionGiveback" hidden></div>
@@ -8443,7 +8468,7 @@ function renderMarket() {
     display.source === "TRADE" ? (fresh && view.regularHours ? "Live trade price" : "Last received trade price") : "Price unavailable";
   setText("liveHeaderPrice", "GOOGL " + (Number.isFinite(display.price) && display.price > 0 ? dollars(display.price) : "—"));
   setText("priceSource", sourceLabel);
-  setText("dataStatus", "V3.2.31 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
+  setText("dataStatus", "V3.2.33 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
     (view.candleTime ? " · Confirmed candle ended " + timeText(new Date(Date.parse(view.candleTime) + 120000).toISOString()) : ""));
   setText("controlHeadline", view.candleControl === "BULLS" ? "BUYERS LEAD THE LAST COMPLETED CANDLE" :
     view.candleControl === "BEARS" ? "SELLERS LEAD THE LAST COMPLETED CANDLE" : "LAST COMPLETED CANDLE SHOWS INDECISION");
@@ -8471,33 +8496,49 @@ function renderMarket() {
   if (liveReady) lastLivePressure = {...live};
   else lastLivePressure = null;
 
-  // Presentation only: confirmed cues reuse the existing button eligibility.
-  // Developing cues use live pressure, but never imply entry confirmation.
+  // V3.2.33: cues must agree with the established new-entry gate.
+  // Live pressure still drives character motion; it is not itself an entry signal.
   const arena = el("opportunityArena");
   const cue = el("opportunityCue");
   const readySide = view.regularHours && fresh && !view.chopActive && !view.warningPending && view.pulseDirection !== "WAIT" ? view.pulseDirection : "WAIT";
   let opportunity = "wait", cueText = "WAIT";
-  if (readySide === "CALL" || readySide === "PUT") {
+  if (!fresh || !liveReady) {
+    opportunity = "data-delayed";
+    cueText = "DATA DELAYED";
+  } else if (!view.regularHours) {
+    cueText = "MARKET CLOSED";
+  } else if (view.chopActive || view.warningPending) {
+    cueText = "WAIT";
+  } else if (readySide === "CALL" || readySide === "PUT") {
     opportunity = readySide.toLowerCase() + "-ready";
     cueText = readySide + " SETUP";
-  } else if (liveReady && !view.chopActive && !view.warningPending && view.regularHours) {
+  } else {
+    // Pressure by itself is not enough to advertise an impending CALL/PUT.
+    // A developing watch cue must have matching established directional evidence.
     const lead = Number(live.bull) - Number(live.bear);
-    if (lead >= 2) { opportunity = "call-watch"; cueText = "WATCH CALL"; }
-    else if (lead <= -2) { opportunity = "put-watch"; cueText = "WATCH PUT"; }
+    if (lead >= 2 && view.direction === "CALL" && view.candleControl === "BULLS") {
+      opportunity = "call-watch"; cueText = "WATCH CALL";
+    } else if (lead <= -2 && view.direction === "PUT" && view.candleControl === "BEARS") {
+      opportunity = "put-watch"; cueText = "WATCH PUT";
+    } else if (Math.abs(lead) >= 2) {
+      cueText = lead > 0 ? "BULLS GAINING — WAIT" : "BEARS GAINING — WAIT";
+    }
   }
-  if (!fresh || !view.regularHours || view.chopActive || view.warningPending) {opportunity="wait"; cueText="WAIT";}
-  arena.classList.remove("op-wait","op-call-watch","op-put-watch","op-call-ready","op-put-ready");
+  arena.classList.remove("op-wait","op-data-delayed","op-call-watch","op-put-watch","op-call-ready","op-put-ready");
   arena.classList.add("op-"+opportunity);
   cue.textContent = cueText;
   const bullPower = liveReady ? Number(live.bull) || 0 : 0;
   const bearPower = liveReady ? Number(live.bear) || 0 : 0;
   const edge = bullPower - bearPower;
-  const active = opportunity !== "wait";
+  const active = liveReady && view.regularHours;
   const strength = Math.min(1,Math.abs(edge)/4);
-  arena.style.setProperty("--bear-step", (active ? edge < 0 ? -4-6*strength : 5*strength : -0.5).toFixed(1)+"px");
-  arena.style.setProperty("--bull-step", (active ? edge > 0 ? 4+6*strength : -5*strength : 0.5).toFixed(1)+"px");
-  arena.style.setProperty("--bear-tilt", active && edge < 0 ? "-2deg" : "-0.2deg");
-  arena.style.setProperty("--bull-tilt", active && edge > 0 ? "2deg" : "0.2deg");
+  // The battle continues during WAIT, with restrained movement; stale data is frozen.
+  const waitScale = opportunity === "wait" ? 0.42 : 1;
+  arena.style.setProperty("--bear-step", (active ? edge < 0 ? (-1.5-6*strength)*waitScale : edge > 0 ? (2+5*strength)*waitScale : -0.5 : 0).toFixed(1)+"px");
+  arena.style.setProperty("--bull-step", (active ? edge > 0 ? (1.5+6*strength)*waitScale : edge < 0 ? (-2-5*strength)*waitScale : 0.5 : 0).toFixed(1)+"px");
+  arena.style.setProperty("--bear-tilt", active && edge < 0 ? "-1.5deg" : "-0.2deg");
+  arena.style.setProperty("--bull-tilt", active && edge > 0 ? "1.5deg" : "0.2deg");
+  arena.classList.toggle("market-closed", !active);
   setText("entryAction", view.regularHours && !fresh ? "WAIT — Data not current" : view.action.title);
   setText("entryActionDetail", view.regularHours && !fresh ? "Entry cues are paused until fresh prices and candles return." : view.action.detail);
   setText("actionContext", "NEW ENTRY");
@@ -8584,7 +8625,7 @@ function renderTracker() {
   if (!active) {
     setText("entryTrackerState", !view.regularHours ? "MARKET CLOSED — Tracking resumes during regular hours" : canMarkNow() ? "Ready to mark your CALL or PUT" : "WAIT — Fresh trading data unavailable");
     setText("entryTrackerDetail", !view.regularHours ? "Entry marking is paused until regular trading resumes." : "After placing your trade, press its button to track GOOGL from that point. A steady button remains available during chop.");
-    setText("mainCenterLabel", "NEUTRAL");
+    setText("mainCenterLabel", "ENTRY REFERENCE");
     return;
   }
   const entry = cents(trackedEntry.price);
