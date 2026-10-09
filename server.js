@@ -8267,19 +8267,10 @@ body.trade-active .pressureSupport { display:none; }
 
   </div>
 
-  <div class="strengthMeter" aria-label="Latest completed candle strength; outline marks last confirmed direction">
+  <div class="strengthMeter" aria-label="Live developing-candle price pressure; outline marks last confirmed direction">
     <div id="bearStrength" class="strengthSide strengthBear ${view.direction === "PUT" ? "confirmedSide" : ""}"><span class="strengthName">BEARS</span><div class="strengthBoxes">${strengthBoxes("bear", fiveBoxStrength.bear)}</div><span class="strengthCount">${fiveBoxStrength.bear}/5</span></div>
-    <div class="strengthCaption">CANDLE STRENGTH<br><span id="confirmedDirection">${view.direction === "CALL" ? "BUYERS" : view.direction === "PUT" ? "SELLERS" : "NO SIDE"} CONFIRMED</span></div>
+    <div class="strengthCaption">LIVE PRESSURE<br><span id="confirmedDirection">${view.direction === "CALL" ? "BUYERS" : view.direction === "PUT" ? "SELLERS" : "NO SIDE"} CONFIRMED</span></div>
     <div id="bullStrength" class="strengthSide strengthBull ${view.direction === "CALL" ? "confirmedSide" : ""}"><span class="strengthCount">${fiveBoxStrength.bull}/5</span><div class="strengthBoxes">${strengthBoxes("bull", fiveBoxStrength.bull)}</div><span class="strengthName">BULLS</span></div>
-  </div>
-  <div class="liveStrengthPanel" aria-live="off">
-    <span class="liveStrengthTitle">LIVE PRESSURE <small>DEVELOPING 2-MIN CANDLE</small></span>
-    <div class="liveStrengthBars"><span id="liveBearBars">BEARS —</span><span id="liveBullBars">BULLS —</span></div>
-    <div id="liveStrengthStatus">Waiting for fresh trade data</div>
-    <div id="liveStrengthMomentum">Pressure direction: waiting for readings</div>
-    <div id="liveStrengthConfirmation">Confirmed trend: checking</div>
-    <small class="liveStrengthDisclaimer">Price-movement estimate, not actual buy/sell order flow. Not a trade trigger.</small>
-    <small id="dataDiagnosticsLine" class="liveStrengthDisclaimer">Data diagnostics initializing</small>
   </div>
 
   <div class="cockpit">
@@ -8435,11 +8426,11 @@ function updateDataIssueLog() {
     dataIssueHistory.unshift(lastDataIssue); dataIssueStartedAt = null;
   }
   if (dataIssueHistory.length > 30) dataIssueHistory.length = 30;
-  const target = document.getElementById("dataDiagnosticsLine");
+  const target = document.getElementById("dataStatus");
   if (target) {
     const current = dataIssueStartedAt ? "WAIT — " + dataIssueStartedAt.reason + " (" + Math.round((now-dataIssueStartedAt.start)/1000) + "s)" : "Data checks passing";
     const previous = dataIssueHistory[0];
-    target.textContent = current + (previous ? " | Last: " + previous.reason + " " + previous.seconds + "s at " + previous.at : "") +
+    target.title = current + (previous ? " | Last: " + previous.reason + " " + previous.seconds + "s at " + previous.at : "") +
       " | Events: " + dataIssueHistory.length;
   }
 }
@@ -8477,38 +8468,31 @@ function renderMarket() {
     display.source === "TRADE" ? (fresh && view.regularHours ? "Live trade price" : "Last received trade price") : "Price unavailable";
   setText("liveHeaderPrice", "GOOGL " + (Number.isFinite(display.price) && display.price > 0 ? dollars(display.price) : "—"));
   setText("priceSource", sourceLabel);
-  setText("dataStatus", "V3.2.25 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
+  setText("dataStatus", "V3.2.28 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
     (view.candleTime ? " · Confirmed candle ended " + timeText(new Date(Date.parse(view.candleTime) + 120000).toISOString()) : ""));
   setText("controlHeadline", view.candleControl === "BULLS" ? "BUYERS LEAD THE LAST COMPLETED CANDLE" :
     view.candleControl === "BEARS" ? "SELLERS LEAD THE LAST COMPLETED CANDLE" : "LAST COMPLETED CANDLE SHOWS INDECISION");
   setText("pressureSummary", view.strength.status);
-  for (const side of ["bear","bull"]) {
-    const box = el(side + "Strength"), count = view.strength[side];
-    box.classList.toggle("confirmedSide", view.direction === (side === "bull" ? "CALL" : "PUT"));
-    box.querySelectorAll(".strengthBox").forEach((b,i) => b.classList.toggle("on", i<count));
-    box.querySelector(".strengthCount").textContent = count + "/5";
-    box.setAttribute("aria-label", (side === "bull" ? "Buyers" : "Sellers") + " candle strength " + count + " of 5" +
-      (view.direction === (side === "bull" ? "CALL" : "PUT") ? "; last confirmed direction" : ""));
-  }
-  setText("confirmedDirection", view.direction === "CALL" ? "BUYERS CONFIRMED" : view.direction === "PUT" ? "SELLERS CONFIRMED" : "DIRECTION UNCONFIRMED");
   const live = view.liveStrength || {state:"UNAVAILABLE",bull:0,bear:0,message:"Live pressure unavailable"};
   const liveReady = fresh && view.regularHours && live.state !== "UNAVAILABLE";
   const liveSide = liveReady ? live.state : "UNAVAILABLE";
-  setText("liveBearBars", "BEARS " + (liveReady ? live.bear + "/5" : "—"));
-  setText("liveBullBars", "BULLS " + (liveReady ? live.bull + "/5" : "—"));
-  setText("liveStrengthStatus", liveReady ? live.message : "WAIT — Live pressure unavailable");
-  let momentum = "Waiting for fresh readings";
+  let momentum = "WAIT — DATA DELAYED";
   if (liveReady) {
-    if (liveSide === "BALANCED") momentum = "Balanced — neither side is gaining clear ground";
+    if (liveSide === "BALANCED") momentum = "BALANCED";
     else if (lastLivePressure && lastLivePressure.candleTime === live.candleTime && lastLivePressure.state === liveSide) {
       const diff = Math.abs(Number(live.delta)) - Math.abs(Number(lastLivePressure.delta));
-      momentum = diff > 0.009 ? "Strengthening ↑" : diff < -0.009 ? "Fading ↓" : "Holding →";
-    } else momentum = "New directional push — observing";
+      momentum = diff > 0.009 ? "BUILDING ↑" : diff < -0.009 ? "FADING ↓" : "HOLDING →";
+    } else momentum = "NEW PUSH";
   }
-  setText("liveStrengthMomentum", "Momentum: " + momentum);
-  const confirmed = view.direction === "CALL" ? "BULLS" : view.direction === "PUT" ? "BEARS" : "NONE";
-  setText("liveStrengthConfirmation", "Completed-candle trend: " + (confirmed === "NONE" ? "unconfirmed" : confirmed + " confirmed") +
-    (liveReady && liveSide !== "BALANCED" && confirmed !== "NONE" ? (liveSide === confirmed ? " · live move aligned" : " · live move opposing (not a reversal confirmation)") : ""));
+  for (const side of ["bear","bull"]) {
+    const box = el(side + "Strength"), count = liveReady ? Math.max(0,Math.min(5,Number(live[side]) || 0)) : 0;
+    box.classList.toggle("confirmedSide", view.direction === (side === "bull" ? "CALL" : "PUT"));
+    box.querySelectorAll(".strengthBox").forEach((b,i) => b.classList.toggle("on", i<count));
+    box.querySelector(".strengthCount").textContent = liveReady ? count + "/5" : "—";
+    box.setAttribute("aria-label", (side === "bull" ? "Buyers" : "Sellers") + " live price pressure " + (liveReady ? count + " of 5" : "unavailable") +
+      (view.direction === (side === "bull" ? "CALL" : "PUT") ? "; last confirmed trend direction" : ""));
+  }
+  setText("confirmedDirection", momentum);
   if (liveReady) lastLivePressure = {...live};
   else lastLivePressure = null;
 
