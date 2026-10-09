@@ -7186,7 +7186,6 @@ const bias15m = analyze15MinuteBias(riderCandles15m);
 const view = buildDashboardView();
 const aiRead = view.marketRead;
 const hold = view.hold;
-const ropePercent = Math.max(36, Math.min(64, 50 + Number(battle.ropePosition || 0) * 0.28));
 const ropeMarkerScore = Number(battle.ropePosition || 0);
 const ropeMarkerClass = ropeMarkerScore < -1 ? "bear-control" : ropeMarkerScore > 1 ? "bull-control" : "neutral-control";
 const battleControl = view.candleControl;
@@ -7445,47 +7444,7 @@ body {
   border: 1px solid rgba(85, 230, 154, 0.8);
 }
 
-/* KNOT */
-
-.knot {
-  position: absolute;
-  left: ${ropePercent}%;
-  top: calc(50% - 15px);
-
-  width: 30px;
-  height: 30px;
-
-  transform: translateX(-50%);
-
-  border-radius: 50%;
-
-  background: #f3c969;
-  border: 4px solid #ffffff;
-
-  box-shadow:
-    0 0 12px rgba(255,255,255,.35);
-  z-index: 8;
-
-  transition:
-    left 0.8s ease;
-}
-
-.knot.bear-control { background: #f05a6c; box-shadow: 0 0 11px rgba(240,90,108,.45); }
-.knot.bull-control { background: #36cf88; box-shadow: 0 0 11px rgba(54,207,136,.45); }
-.knot.neutral-control { background: #f3c969; }
-.knot::after {
-  content: "TREND CONTROL";
-  position: absolute;
-  top: calc(100% + 7px);
-  left: 50%;
-  transform: translateX(-50%);
-  color: #e0e5ed;
-  font: 700 9px system-ui, sans-serif;
-  letter-spacing: .055em;
-  white-space: nowrap;
-  text-shadow: 0 1px 4px #070c15;
-  pointer-events: none;
-}
+/* V3.2.34: trend control is now indicated under the HA side scoreboards. */
 /* -------------------------
    ACTION
 ------------------------- */
@@ -7753,14 +7712,14 @@ and (max-height: 700px) {
 .ropeArea.op-call-watch .opportunityCue,.ropeArea.op-call-ready .opportunityCue {color:#53e6a2;border-color:#3ecb8b}
 .ropeArea.op-put-watch .opportunityCue,.ropeArea.op-put-ready .opportunityCue {color:#ff8592;border-color:#ec6375}
 .ropeArea.op-call-ready .tug-bull img,.ropeArea.op-put-ready .tug-bear img { animation-duration:1.15s; }
-.ropeArea.op-wait .tug-character img { animation-duration:3.8s; }
+.ropeArea.op-wait .tug-character img { animation-duration:2.8s; }
 .ropeArea.op-wait .rope {opacity:.6}
 /* V3.2.33: a single prominent trade cue; secondary center/entry marker remains legible. */
 .ropeArea .opportunityCue { top: 3px; font-weight: 850; z-index: 13; }
 .ropeArea .centerLabel { top: 34px; z-index: 11; font-size: 10px; letter-spacing: .07em; background: rgba(9,15,25,.82); padding: 1px 5px; border-radius: 4px; white-space: nowrap; }
-.ropeArea .knot::after { font-size: 8px; top: calc(100% + 4px); }
+
 .ropeArea.op-data-delayed .opportunityCue { color: #ffcf73; border-color: #d3a24c; }
-.ropeArea.op-wait .tug-character img { animation-duration: 3.8s; }
+.ropeArea.op-wait .tug-character img { animation-duration: 2.8s; }
 /* Existing trade markers and position readouts remain unchanged. */
 /* Keep the full readout visible in one responsive dashboard. */
 body { padding: clamp(8px, 1.3vw, 16px); }
@@ -7918,6 +7877,13 @@ body { padding: clamp(8px, 1.3vw, 16px); }
 .haSideScore .scoreTeam { font-size:9px; font-weight:900; letter-spacing:1.2px; }
 .haSideScore .scoreNumber { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:23px; line-height:1; font-weight:1000; text-shadow:0 0 8px currentColor; }
 .haSideScore .scoreLabel { font-size:7px; letter-spacing:1.3px; opacity:.9; margin-top:2px; }
+/* V3.2.34: small indicator directly beneath the existing scoreboards. */
+.trendSideLabel { position:absolute; top:66px; z-index:12; font:800 clamp(8px,.85vw,11px) system-ui,sans-serif; letter-spacing:.035em; padding:3px 7px; border-radius:6px; background:#0a111c; border:1px solid transparent; opacity:0; pointer-events:none; white-space:nowrap; transform:translateX(-50%); }
+.trendSideLabel.trendBear { left:calc(17% + 46px); color:#ff6474; }
+.trendSideLabel.trendBull { right:calc(17% + 46px); transform:translateX(50%); color:#56e9a0; }
+.trendSideLabel.trendBear.active { opacity:1; border-color:#ff6474; box-shadow:0 0 10px #ff647477; }
+.trendSideLabel.trendBull.active { opacity:1; border-color:#56e9a0; box-shadow:0 0 10px #56e9a077; }
+
 .arena .teams { display:none; }
 
 
@@ -8231,7 +8197,9 @@ body.trade-active .pressureSupport { display:none; }
 
     <div class="teamOverlay bearOverlay">BEARS</div>
     <div class="haSideScore bearScore"><div class="scoreTeam">BEARS</div><div class="scoreNumber">${String(bearHARun).padStart(2, "0")}</div><div class="scoreLabel">CONTROL</div></div>
+    <div class="trendSideLabel trendBear ${ropeMarkerClass === "bear-control" ? "active" : ""}" aria-label="Bearish trend control">TREND CONTROL</div>
     <div class="haSideScore bullScore"><div class="scoreTeam">BULLS</div><div class="scoreNumber">${String(bullHARun).padStart(2, "0")}</div><div class="scoreLabel">CONTROL</div></div>
+    <div class="trendSideLabel trendBull ${ropeMarkerClass === "bull-control" ? "active" : ""}" aria-label="Bullish trend control">TREND CONTROL</div>
     <div class="teamOverlay bullOverlay">BULLS</div>
 
     <div class="teams">
@@ -8247,7 +8215,7 @@ body.trade-active .pressureSupport { display:none; }
     </div>
 
 
-    <div id="opportunityArena" class="ropeArea ${tugIntensity} ${tugState} ${regularHours ? "market-open" : "market-closed"}" style="--bear-step:${tugAdvantage < -1 ? (-4 - 6*tugPull).toFixed(1) : tugAdvantage > 1 ? (5*tugPull).toFixed(1) : -1}px;--bull-step:${tugAdvantage > 1 ? (4+6*tugPull).toFixed(1) : tugAdvantage < -1 ? (-5*tugPull).toFixed(1) : 1}px;--bear-tilt:${tugAdvantage < -1 ? -2 : -0.3}deg;--bull-tilt:${tugAdvantage > 1 ? 2 : 0.3}deg;--tug-cycle:${tugBalance > 1 ? 1.55 : 2.8}s">
+    <div id="opportunityArena" class="ropeArea ${tugIntensity} ${tugState} ${regularHours ? "market-open" : "market-closed"}" style="--bear-step:${tugAdvantage < -1 ? (-4 - 6*tugPull).toFixed(1) : tugAdvantage > 1 ? (5*tugPull).toFixed(1) : -2.0}px;--bull-step:${tugAdvantage > 1 ? (4+6*tugPull).toFixed(1) : tugAdvantage < -1 ? (-5*tugPull).toFixed(1) : 2.0}px;--bear-tilt:${tugAdvantage < -1 ? -2 : -0.5}deg;--bull-tilt:${tugAdvantage > 1 ? 2 : 0.5}deg;--tug-cycle:${tugBalance > 1 ? 1.55 : 2.8}s">
     <div class="opportunityCue" id="opportunityCue" role="status">WAIT</div>
     <div class="tug-character tug-bear"><img src="/BEARS.jpeg" alt="Bear pulling the rope"></div>
     <div class="tug-character tug-bull"><img src="/BULLS.jpeg" alt="Bull pulling the rope"></div>
@@ -8255,7 +8223,6 @@ body.trade-active .pressureSupport { display:none; }
       <div class="centerLabel" id="mainCenterLabel">NEUTRAL</div>
       <div class="rope"></div>
       <div class="centerLine"></div>
-      <div class="knot ${ropeMarkerClass}" id="battleKnot" aria-label="Trend control marker"></div>
       <div class="positionBest" id="positionBest" hidden><span>BEST</span></div>
       <div class="positionCurrent" id="positionCurrent" hidden><span>CURRENT</span></div>
       <div class="positionGiveback" id="positionGiveback" hidden></div>
@@ -8468,7 +8435,7 @@ function renderMarket() {
     display.source === "TRADE" ? (fresh && view.regularHours ? "Live trade price" : "Last received trade price") : "Price unavailable";
   setText("liveHeaderPrice", "GOOGL " + (Number.isFinite(display.price) && display.price > 0 ? dollars(display.price) : "—"));
   setText("priceSource", sourceLabel);
-  setText("dataStatus", "V3.2.33 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
+  setText("dataStatus", "V3.2.34 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
     (view.candleTime ? " · Confirmed candle ended " + timeText(new Date(Date.parse(view.candleTime) + 120000).toISOString()) : ""));
   setText("controlHeadline", view.candleControl === "BULLS" ? "BUYERS LEAD THE LAST COMPLETED CANDLE" :
     view.candleControl === "BEARS" ? "SELLERS LEAD THE LAST COMPLETED CANDLE" : "LAST COMPLETED CANDLE SHOWS INDECISION");
