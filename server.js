@@ -6946,6 +6946,29 @@ function candleStrength(ha, direction, previousDirection, confirmedAt) {
     time: last?.time || null, referenceBodies: bodies.length };
 }
 
+// V3.2.26: presentation-only live pressure. Trade-price movement is a proxy,
+// NOT order-flow, bid/ask volume, or an entry signal. No additional data requests.
+function liveStrengthSnapshot(now = Date.now()) {
+  const d = developingCandle;
+  const last = completedCandles.at(-1);
+  const tradeAge = now - Date.parse(latestGOOGLTrade?.time);
+  const active = getMarketSession(new Date(now)).regularHours && alpacaStreamStatus === "connected" &&
+    Number.isFinite(tradeAge) && tradeAge >= -10000 && tradeAge < 30000 &&
+    d && Number.isFinite(Date.parse(d.time)) && now - Date.parse(d.time) < 150000;
+  if (!active) return {state:"UNAVAILABLE", bull:0, bear:0, message:"Live pressure unavailable — waiting for fresh trades"};
+  const open = Number(d.open), close = Number(d.close);
+  if (!Number.isFinite(open) || !Number.isFinite(close) || open <= 0) return {state:"UNAVAILABLE",bull:0,bear:0,message:"Live pressure unavailable"};
+  const refs = completedCandles.slice(-12).map(c => Math.abs(Number(c.close)-Number(c.open))).filter(v => Number.isFinite(v) && v > 0);
+  const avg = refs.length >= 3 ? refs.reduce((a,b)=>a+b,0)/refs.length : 0;
+  const delta = close-open, threshold = Math.max(0.02,avg*0.15);
+  const side = delta > threshold ? "BULLS" : delta < -threshold ? "BEARS" : "BALANCED";
+  const score = side === "BALANCED" ? 1 : Math.max(1,Math.min(5,Math.ceil(Math.abs(delta)/Math.max(0.02,avg)*3)));
+  return {state:side, bull:side === "BULLS" ? score : 1, bear:side === "BEARS" ? score : 1,
+    message:side === "BALANCED" ? "Live price movement is balanced" :
+      (side === "BULLS" ? "Buyers" : "Sellers") + " pushing this developing candle",
+    delta:Number(delta.toFixed(4)), candleTime:d.time};
+}
+
 let lastKnownChopState = "WAIT";
 function displayChopRisk(candles) {
   const result = analyzeChopRisk(candles);
@@ -7013,9 +7036,21 @@ function buildDashboardView(now = Date.now()) {
     hasClose ? { price:lastClose, source:"CANDLE", time:new Date(Date.parse(candleTime)+120000).toISOString() } :
     { price:null, source:"UNAVAILABLE", time:null };
   return {
-    priceDisplay, version:"3.2.25", regularHours:session.regularHours, session:session.session, fresh,
+    priceDisplay, version:"3.2.27", regularHours:session.regularHours, session:session.session, fresh,
+    dataDiagnostics: {
+      checkedAt:new Date(now).toISOString(), streamStatus:alpacaStreamStatus,
+      tradeAgeMs:Number.isFinite(priceAge) ? priceAge : null,
+      candleAgeMs:Number.isFinite(candleAge) ? candleAge : null,
+      tradeFresh:Number.isFinite(priceAge) && priceAge >= -10000 && priceAge < 30000,
+      candleFresh:Number.isFinite(candleAge) && candleAge >= 120000 && candleAge < 360000,
+      reason:alpacaStreamStatus !== "connected" ? "STREAM_NOT_CONNECTED" :
+        !(Number(latestGOOGLTrade?.price)>0) || !Number.isFinite(priceAge) ? "NO_TRADE" :
+        priceAge < -10000 ? "TRADE_CLOCK_SKEW" : priceAge >= 30000 ? "TRADE_DELAY" :
+        !Number.isFinite(candleAge) ? "NO_COMPLETED_CANDLE" :
+        candleAge < 120000 ? "CANDLE_CLOCK_SKEW" : candleAge >= 360000 ? "CANDLE_DELAY" : "OK"
+    },
     candleTime, quoteTime:latestGOOGLTrade?.time || null, direction, entrySignal:c.analysis.signal,
-    pulseDirection, chopState:chop.state, chopActive, warningPending, strength:c.strength,
+    pulseDirection, chopState:chop.state, chopActive, warningPending, strength:c.strength, liveStrength:liveStrengthSnapshot(now),
     candleControl: c.strength.doji ? "NEUTRAL" : c.strength.color === "GREEN" ? "BULLS" : c.strength.color === "RED" ? "BEARS" : "NEUTRAL",
     action, marketRead, warning,
     hold: { direction:direction === "CALL" ? "BULL" : direction === "PUT" ? "BEAR" : "NONE",
@@ -7893,6 +7928,14 @@ body { padding: clamp(8px, 1.3vw, 16px); }
   align-items:center; gap:10px; min-height:34px; padding:5px 12px; margin:0;
   background:linear-gradient(180deg,#0d141d,#090e14); border:1px solid #293442; border-radius:10px;
 }
+ .liveStrengthPanel {grid-column:1/-1; padding:8px 12px; border:1px solid #293442; border-radius:10px; background:#0c141c; color:#d9e4ee; display:grid; gap:4px; text-align:center;}
+.liveStrengthTitle {font-size:11px; font-weight:900; letter-spacing:1px;}
+.liveStrengthTitle small {font-size:9px; font-weight:500; color:#9aa7b7;}
+.liveStrengthBars {display:flex; justify-content:space-around; gap:12px; font-size:12px; font-weight:900;}
+#liveBearBars {color:#ff6570;} #liveBullBars {color:#62efa5;}
+#liveStrengthStatus {font-size:12px; font-weight:800;}
+#liveStrengthMomentum,#liveStrengthConfirmation {font-size:11px; color:#b8c7d8;}
+.liveStrengthDisclaimer {font-size:9px; color:#8d9eaf;}
 .strengthSide { display:flex; align-items:center; gap:7px; min-width:0; }
 .strengthBear { justify-content:flex-end; }
 .strengthBull { justify-content:flex-start; }
@@ -8229,7 +8272,15 @@ body.trade-active .pressureSupport { display:none; }
     <div class="strengthCaption">CANDLE STRENGTH<br><span id="confirmedDirection">${view.direction === "CALL" ? "BUYERS" : view.direction === "PUT" ? "SELLERS" : "NO SIDE"} CONFIRMED</span></div>
     <div id="bullStrength" class="strengthSide strengthBull ${view.direction === "CALL" ? "confirmedSide" : ""}"><span class="strengthCount">${fiveBoxStrength.bull}/5</span><div class="strengthBoxes">${strengthBoxes("bull", fiveBoxStrength.bull)}</div><span class="strengthName">BULLS</span></div>
   </div>
-
+  <div class="liveStrengthPanel" aria-live="off">
+    <span class="liveStrengthTitle">LIVE PRESSURE <small>DEVELOPING 2-MIN CANDLE</small></span>
+    <div class="liveStrengthBars"><span id="liveBearBars">BEARS —</span><span id="liveBullBars">BULLS —</span></div>
+    <div id="liveStrengthStatus">Waiting for fresh trade data</div>
+    <div id="liveStrengthMomentum">Pressure direction: waiting for readings</div>
+    <div id="liveStrengthConfirmation">Confirmed trend: checking</div>
+    <small class="liveStrengthDisclaimer">Price-movement estimate, not actual buy/sell order flow. Not a trade trigger.</small>
+    <small id="dataDiagnosticsLine" class="liveStrengthDisclaimer">Data diagnostics initializing</small>
+  </div>
 
   <div class="cockpit">
     <div class="actionBox">
@@ -8284,7 +8335,7 @@ body.trade-active .pressureSupport { display:none; }
   </div>
 
   <div class="warning" id="warningSummary">${view.warning}</div>
-  <div class="dataStatus" id="dataStatus">V3.2.25 TEST · Waiting for a fresh price</div>
+  <div class="dataStatus" id="dataStatus">V3.2.26 TEST · Waiting for a fresh price</div>
   <a class="researchAccess" href="/research" title="Paper-trading research only">Research<span>Paper trades • For testing only</span></a>
 
 </div>
@@ -8362,7 +8413,37 @@ function renderDailyTradeResults() {
 let view = ${JSON.stringify(view)};
 let quote = ${JSON.stringify(latestGOOGLTrade || null)};
 let streamStatus = ${JSON.stringify(alpacaStreamStatus)};
+let lastLivePressure = null;
 let requestHealthy = true, requestInFlight = false;
+let lastRequestError = "", dataIssueStartedAt = null, lastDataIssue = null;
+const dataIssueHistory = [];
+function updateDataIssueLog() {
+  const diag = view?.dataDiagnostics;
+  const reason = !requestHealthy ? (lastRequestError || "DASHBOARD_REQUEST_FAILED") :
+    diag?.reason || (streamStatus !== "connected" ? "STREAM_NOT_CONNECTED" : "UNKNOWN");
+  const failing = view?.regularHours && (!requestHealthy || !freshNow());
+  const now = Date.now();
+  if (failing && !dataIssueStartedAt) dataIssueStartedAt = {start:now, reason};
+  if (failing && dataIssueStartedAt && dataIssueStartedAt.reason !== reason) {
+    dataIssueHistory.unshift({reason:dataIssueStartedAt.reason, seconds:Math.round((now-dataIssueStartedAt.start)/100)/10,
+      at:new Date(dataIssueStartedAt.start).toLocaleTimeString()});
+    dataIssueStartedAt = {start:now,reason};
+  }
+  if (!failing && dataIssueStartedAt) {
+    lastDataIssue = {reason:dataIssueStartedAt.reason,seconds:Math.round((now-dataIssueStartedAt.start)/100)/10,
+      at:new Date(dataIssueStartedAt.start).toLocaleTimeString()};
+    dataIssueHistory.unshift(lastDataIssue); dataIssueStartedAt = null;
+  }
+  if (dataIssueHistory.length > 30) dataIssueHistory.length = 30;
+  const target = document.getElementById("dataDiagnosticsLine");
+  if (target) {
+    const current = dataIssueStartedAt ? "WAIT — " + dataIssueStartedAt.reason + " (" + Math.round((now-dataIssueStartedAt.start)/1000) + "s)" : "Data checks passing";
+    const previous = dataIssueHistory[0];
+    target.textContent = current + (previous ? " | Last: " + previous.reason + " " + previous.seconds + "s at " + previous.at : "") +
+      " | Events: " + dataIssueHistory.length;
+  }
+}
+
 let trackedEntry = null;
 try {
   const saved = JSON.parse(localStorage.getItem(trackerKey) || "null");
@@ -8410,6 +8491,27 @@ function renderMarket() {
       (view.direction === (side === "bull" ? "CALL" : "PUT") ? "; last confirmed direction" : ""));
   }
   setText("confirmedDirection", view.direction === "CALL" ? "BUYERS CONFIRMED" : view.direction === "PUT" ? "SELLERS CONFIRMED" : "DIRECTION UNCONFIRMED");
+  const live = view.liveStrength || {state:"UNAVAILABLE",bull:0,bear:0,message:"Live pressure unavailable"};
+  const liveReady = fresh && view.regularHours && live.state !== "UNAVAILABLE";
+  const liveSide = liveReady ? live.state : "UNAVAILABLE";
+  setText("liveBearBars", "BEARS " + (liveReady ? live.bear + "/5" : "—"));
+  setText("liveBullBars", "BULLS " + (liveReady ? live.bull + "/5" : "—"));
+  setText("liveStrengthStatus", liveReady ? live.message : "WAIT — Live pressure unavailable");
+  let momentum = "Waiting for fresh readings";
+  if (liveReady) {
+    if (liveSide === "BALANCED") momentum = "Balanced — neither side is gaining clear ground";
+    else if (lastLivePressure && lastLivePressure.candleTime === live.candleTime && lastLivePressure.state === liveSide) {
+      const diff = Math.abs(Number(live.delta)) - Math.abs(Number(lastLivePressure.delta));
+      momentum = diff > 0.009 ? "Strengthening ↑" : diff < -0.009 ? "Fading ↓" : "Holding →";
+    } else momentum = "New directional push — observing";
+  }
+  setText("liveStrengthMomentum", "Momentum: " + momentum);
+  const confirmed = view.direction === "CALL" ? "BULLS" : view.direction === "PUT" ? "BEARS" : "NONE";
+  setText("liveStrengthConfirmation", "Completed-candle trend: " + (confirmed === "NONE" ? "unconfirmed" : confirmed + " confirmed") +
+    (liveReady && liveSide !== "BALANCED" && confirmed !== "NONE" ? (liveSide === confirmed ? " · live move aligned" : " · live move opposing (not a reversal confirmation)") : ""));
+  if (liveReady) lastLivePressure = {...live};
+  else lastLivePressure = null;
+
   setText("entryAction", view.regularHours && !fresh ? "WAIT — Data not current" : view.action.title);
   setText("entryActionDetail", view.regularHours && !fresh ? "Entry cues are paused until fresh prices and candles return." : view.action.detail);
   setText("actionContext", "NEW ENTRY");
@@ -8585,6 +8687,7 @@ function reportAnalysisTimingRender(candleTime) {
 
 async function syncLivePriceDisplay() {
   renderAll(); // Expire stale cues even while a request is pending.
+  updateDataIssueLog();
   if (requestInFlight) return;
   requestInFlight = true;
   const controller = new AbortController();
@@ -8595,23 +8698,24 @@ async function syncLivePriceDisplay() {
     const live = await response.json();
     if (!live.dashboard) throw new Error("Incomplete live data");
     view = live.dashboard; quote = live.latestTrade; streamStatus = live.streamStatus;
-    requestHealthy = true;
+    requestHealthy = true; lastRequestError = "";
     if (live.developing2MinCandle) {
       candleClockData.time = live.developing2MinCandle.time;
       candleClockData.open = Number(live.developing2MinCandle.open);
       candleClockData.close = Number(live.developing2MinCandle.close);
       refreshCandleClock();
     }
-  } catch (_) { requestHealthy = false; }
+  } catch (err) { requestHealthy = false; lastRequestError = controller.signal.aborted ? "DASHBOARD_TIMEOUT" : "DASHBOARD_REQUEST_FAILED"; }
   finally {
-    clearTimeout(timeout); requestInFlight = false; renderAll();
+    clearTimeout(timeout); requestInFlight = false; renderAll(); updateDataIssueLog();
     if (requestHealthy && view?.candleTime) reportAnalysisTimingRender(view.candleTime);
   }
 }
 renderAll();
 syncLivePriceDisplay();
 setInterval(syncLivePriceDisplay, 1000);
-setTimeout(() => window.location.reload(), 10000);
+// Avoid forcing a full page reload every 10 seconds: the existing one-second
+// polling loop already refreshes the view, and reloads obscure brief failures.
 
 </script>
 
