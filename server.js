@@ -7708,46 +7708,23 @@ and (max-height: 700px) {
   mask-image: linear-gradient(to left, #000 0%, #000 86%, transparent 100%);
   animation: bullPull 2.4s ease-in-out infinite;
 }
-/* Equal strength is a braced standoff; a winner pulls while the loser slides.
-   Values are driven by the same 0–5 strength readings shown below the arena. */
-.ropeArea {
-  --bear-drive: 0.14;
-  --bull-drive: 0.14;
-  --bear-drag: 0;
-  --bull-drag: 0;
-  --tug-cycle: 2.8s;
-}
-.ropeArea.tug-bulls-leading {
-  --bull-drive: calc(0.45 + var(--tug-pull) * 0.55);
-  --bear-drive: 0.08;
-  --bear-drag: calc(var(--tug-pull) * 9px);
-  --tug-cycle: 1.55s;
-}
-.ropeArea.tug-bears-leading {
-  --bear-drive: calc(0.45 + var(--tug-pull) * 0.55);
-  --bull-drive: 0.08;
-  --bull-drag: calc(var(--tug-pull) * -9px);
-  --tug-cycle: 1.55s;
-}
+/* Compatible with iPad Safari: precomputed CSS lengths, no typed calc multiplication. */
+.ropeArea { --bear-step: -1px; --bull-step: 1px; --bear-tilt: -0.3deg; --bull-tilt: 0.3deg; --tug-cycle: 2.8s; }
 .ropeArea .tug-character img { animation-duration: var(--tug-cycle); }
-.ropeArea.tug-standoff .tug-character img { opacity: 0.94; }
-.ropeArea.market-closed .tug-character img {
-  animation: none !important;
-  transform: none !important;
-}
+.ropeArea.market-closed .tug-character img { animation: none !important; transform: none !important; }
 .tug-waiting .rope { opacity: 0.65; }
 .tug-early .rope { opacity: 0.8; }
 .tug-building .rope { opacity: 0.95; }
 .tug-confirmed .rope { opacity: 1; filter: brightness(1.18); }
 @keyframes bearPull {
-  0%, 100% { transform: translateX(0) rotate(0deg); }
-  45% { transform: translateX(calc(-9px * var(--bear-drive) + var(--bear-drag))) rotate(calc(-2deg * var(--bear-drive))); }
-  72% { transform: translateX(calc(-3px * var(--bear-drive) + var(--bear-drag) * 0.7)) rotate(calc(-0.7deg * var(--bear-drive))); }
+  0%, 100% { transform: translateX(0px) rotate(0deg); }
+  45% { transform: translateX(var(--bear-step)) rotate(var(--bear-tilt)); }
+  72% { transform: translateX(0px) rotate(0deg); }
 }
 @keyframes bullPull {
-  0%, 100% { transform: translateX(0) rotate(0deg); }
-  45% { transform: translateX(calc(9px * var(--bull-drive) + var(--bull-drag))) rotate(calc(2deg * var(--bull-drive))); }
-  72% { transform: translateX(calc(3px * var(--bull-drive) + var(--bull-drag) * 0.7)) rotate(calc(0.7deg * var(--bull-drive))); }
+  0%, 100% { transform: translateX(0px) rotate(0deg); }
+  45% { transform: translateX(var(--bull-step)) rotate(var(--bull-tilt)); }
+  72% { transform: translateX(0px) rotate(0deg); }
 }
 @media (prefers-reduced-motion: reduce) {
   .ropeArea .tug-character img { animation: none !important; }
@@ -8238,7 +8215,7 @@ body.trade-active .pressureSupport { display:none; }
     </div>
 
 
-    <div class="ropeArea ${tugIntensity} ${tugState} ${regularHours ? "market-open" : "market-closed"}" style="--tug-pull:${tugPull.toFixed(2)}">
+    <div class="ropeArea ${tugIntensity} ${tugState} ${regularHours ? "market-open" : "market-closed"}" style="--bear-step:${tugAdvantage < -1 ? (-4 - 6*tugPull).toFixed(1) : tugAdvantage > 1 ? (5*tugPull).toFixed(1) : -1}px;--bull-step:${tugAdvantage > 1 ? (4+6*tugPull).toFixed(1) : tugAdvantage < -1 ? (-5*tugPull).toFixed(1) : 1}px;--bear-tilt:${tugAdvantage < -1 ? -2 : -0.3}deg;--bull-tilt:${tugAdvantage > 1 ? 2 : 0.3}deg;--tug-cycle:${tugBalance > 1 ? 1.55 : 2.8}s">
     <div class="tug-character tug-bear"><img src="/BEARS.jpeg" alt="Bear pulling the rope"></div>
     <div class="tug-character tug-bull"><img src="/BULLS.jpeg" alt="Bull pulling the rope"></div>
     
@@ -8458,7 +8435,7 @@ function renderMarket() {
     display.source === "TRADE" ? (fresh && view.regularHours ? "Live trade price" : "Last received trade price") : "Price unavailable";
   setText("liveHeaderPrice", "GOOGL " + (Number.isFinite(display.price) && display.price > 0 ? dollars(display.price) : "—"));
   setText("priceSource", sourceLabel);
-  setText("dataStatus", "V3.2.28 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
+  setText("dataStatus", "V3.2.30 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
     (view.candleTime ? " · Confirmed candle ended " + timeText(new Date(Date.parse(view.candleTime) + 120000).toISOString()) : ""));
   setText("controlHeadline", view.candleControl === "BULLS" ? "BUYERS LEAD THE LAST COMPLETED CANDLE" :
     view.candleControl === "BEARS" ? "SELLERS LEAD THE LAST COMPLETED CANDLE" : "LAST COMPLETED CANDLE SHOWS INDECISION");
