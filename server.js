@@ -8435,7 +8435,7 @@ function renderMarket() {
     display.source === "TRADE" ? (fresh && view.regularHours ? "Live trade price" : "Last received trade price") : "Price unavailable";
   setText("liveHeaderPrice", "GOOGL " + (Number.isFinite(display.price) && display.price > 0 ? dollars(display.price) : "—"));
   setText("priceSource", sourceLabel);
-  setText("dataStatus", "V3.2.34 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
+  setText("dataStatus", "V3.2.35 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
     (view.candleTime ? " · Confirmed candle ended " + timeText(new Date(Date.parse(view.candleTime) + 120000).toISOString()) : ""));
   setText("controlHeadline", view.candleControl === "BULLS" ? "BUYERS LEAD THE LAST COMPLETED CANDLE" :
     view.candleControl === "BEARS" ? "SELLERS LEAD THE LAST COMPLETED CANDLE" : "LAST COMPLETED CANDLE SHOWS INDECISION");
@@ -8443,7 +8443,7 @@ function renderMarket() {
   const live = view.liveStrength || {state:"UNAVAILABLE",bull:0,bear:0,message:"Live pressure unavailable"};
   const liveReady = fresh && view.regularHours && live.state !== "UNAVAILABLE";
   const liveSide = liveReady ? live.state : "UNAVAILABLE";
-  let momentum = "WAIT — DATA DELAYED";
+  let momentum = !view.regularHours ? "SESSION ENDED" : "WAIT — DATA DELAYED";
   if (liveReady) {
     if (liveSide === "BALANCED") momentum = "BALANCED";
     else if (lastLivePressure && lastLivePressure.candleTime === live.candleTime && lastLivePressure.state === liveSide) {
@@ -8469,11 +8469,12 @@ function renderMarket() {
   const cue = el("opportunityCue");
   const readySide = view.regularHours && fresh && !view.chopActive && !view.warningPending && view.pulseDirection !== "WAIT" ? view.pulseDirection : "WAIT";
   let opportunity = "wait", cueText = "WAIT";
-  if (!fresh || !liveReady) {
+  if (!view.regularHours) {
+    opportunity = "session-ended";
+    cueText = "MARKET CLOSED";
+  } else if (!fresh || !liveReady) {
     opportunity = "data-delayed";
     cueText = "DATA DELAYED";
-  } else if (!view.regularHours) {
-    cueText = "MARKET CLOSED";
   } else if (view.chopActive || view.warningPending) {
     cueText = "WAIT";
   } else if (readySide === "CALL" || readySide === "PUT") {
@@ -8491,7 +8492,7 @@ function renderMarket() {
       cueText = lead > 0 ? "BULLS GAINING — WAIT" : "BEARS GAINING — WAIT";
     }
   }
-  arena.classList.remove("op-wait","op-data-delayed","op-call-watch","op-put-watch","op-call-ready","op-put-ready");
+  arena.classList.remove("op-wait","op-data-delayed","op-session-ended","op-call-watch","op-put-watch","op-call-ready","op-put-ready");
   arena.classList.add("op-"+opportunity);
   cue.textContent = cueText;
   const bullPower = liveReady ? Number(live.bull) || 0 : 0;
