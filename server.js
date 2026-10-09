@@ -7730,6 +7730,13 @@ and (max-height: 700px) {
   .ropeArea .tug-character img { animation: none !important; }
 }
 
+/* V3.2.31: visual opportunity cues, presentation only. */
+.ropeArea .opportunityCue { position:absolute; z-index:12; top:5px; left:50%; transform:translateX(-50%); font:700 clamp(11px,1.3vw,16px) system-ui,sans-serif; letter-spacing:.08em; padding:5px 12px; border-radius:16px; background:#151c2be8; color:#cbd5e1; border:1px solid #566175; white-space:nowrap; pointer-events:none; }
+.ropeArea.op-call-watch .opportunityCue,.ropeArea.op-call-ready .opportunityCue {color:#53e6a2;border-color:#3ecb8b}
+.ropeArea.op-put-watch .opportunityCue,.ropeArea.op-put-ready .opportunityCue {color:#ff8592;border-color:#ec6375}
+.ropeArea.op-call-ready .tug-bull img,.ropeArea.op-put-ready .tug-bear img { animation-duration:1.15s; }
+.ropeArea.op-wait .tug-character img { animation-duration:3.8s; }
+.ropeArea.op-wait .rope {opacity:.6}
 /* Keep the full readout visible in one responsive dashboard. */
 body { padding: clamp(8px, 1.3vw, 16px); }
 .dashboard {
@@ -8215,7 +8222,8 @@ body.trade-active .pressureSupport { display:none; }
     </div>
 
 
-    <div class="ropeArea ${tugIntensity} ${tugState} ${regularHours ? "market-open" : "market-closed"}" style="--bear-step:${tugAdvantage < -1 ? (-4 - 6*tugPull).toFixed(1) : tugAdvantage > 1 ? (5*tugPull).toFixed(1) : -1}px;--bull-step:${tugAdvantage > 1 ? (4+6*tugPull).toFixed(1) : tugAdvantage < -1 ? (-5*tugPull).toFixed(1) : 1}px;--bear-tilt:${tugAdvantage < -1 ? -2 : -0.3}deg;--bull-tilt:${tugAdvantage > 1 ? 2 : 0.3}deg;--tug-cycle:${tugBalance > 1 ? 1.55 : 2.8}s">
+    <div id="opportunityArena" class="ropeArea ${tugIntensity} ${tugState} ${regularHours ? "market-open" : "market-closed"}" style="--bear-step:${tugAdvantage < -1 ? (-4 - 6*tugPull).toFixed(1) : tugAdvantage > 1 ? (5*tugPull).toFixed(1) : -1}px;--bull-step:${tugAdvantage > 1 ? (4+6*tugPull).toFixed(1) : tugAdvantage < -1 ? (-5*tugPull).toFixed(1) : 1}px;--bear-tilt:${tugAdvantage < -1 ? -2 : -0.3}deg;--bull-tilt:${tugAdvantage > 1 ? 2 : 0.3}deg;--tug-cycle:${tugBalance > 1 ? 1.55 : 2.8}s">
+    <div class="opportunityCue" id="opportunityCue" role="status">WAIT</div>
     <div class="tug-character tug-bear"><img src="/BEARS.jpeg" alt="Bear pulling the rope"></div>
     <div class="tug-character tug-bull"><img src="/BULLS.jpeg" alt="Bull pulling the rope"></div>
     
@@ -8435,7 +8443,7 @@ function renderMarket() {
     display.source === "TRADE" ? (fresh && view.regularHours ? "Live trade price" : "Last received trade price") : "Price unavailable";
   setText("liveHeaderPrice", "GOOGL " + (Number.isFinite(display.price) && display.price > 0 ? dollars(display.price) : "—"));
   setText("priceSource", sourceLabel);
-  setText("dataStatus", "V3.2.30 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
+  setText("dataStatus", "V3.2.31 TEST · " + sourceLabel + (display.time ? " · " + timeText(display.time) : "") +
     (view.candleTime ? " · Confirmed candle ended " + timeText(new Date(Date.parse(view.candleTime) + 120000).toISOString()) : ""));
   setText("controlHeadline", view.candleControl === "BULLS" ? "BUYERS LEAD THE LAST COMPLETED CANDLE" :
     view.candleControl === "BEARS" ? "SELLERS LEAD THE LAST COMPLETED CANDLE" : "LAST COMPLETED CANDLE SHOWS INDECISION");
@@ -8463,6 +8471,33 @@ function renderMarket() {
   if (liveReady) lastLivePressure = {...live};
   else lastLivePressure = null;
 
+  // Presentation only: confirmed cues reuse the existing button eligibility.
+  // Developing cues use live pressure, but never imply entry confirmation.
+  const arena = el("opportunityArena");
+  const cue = el("opportunityCue");
+  const readySide = view.regularHours && fresh && !view.chopActive && !view.warningPending && view.pulseDirection !== "WAIT" ? view.pulseDirection : "WAIT";
+  let opportunity = "wait", cueText = "WAIT";
+  if (readySide === "CALL" || readySide === "PUT") {
+    opportunity = readySide.toLowerCase() + "-ready";
+    cueText = readySide + " SETUP";
+  } else if (liveReady && !view.chopActive && !view.warningPending && view.regularHours) {
+    const lead = Number(live.bull) - Number(live.bear);
+    if (lead >= 2) { opportunity = "call-watch"; cueText = "WATCH CALL"; }
+    else if (lead <= -2) { opportunity = "put-watch"; cueText = "WATCH PUT"; }
+  }
+  if (!fresh || !view.regularHours || view.chopActive || view.warningPending) {opportunity="wait"; cueText="WAIT";}
+  arena.classList.remove("op-wait","op-call-watch","op-put-watch","op-call-ready","op-put-ready");
+  arena.classList.add("op-"+opportunity);
+  cue.textContent = cueText;
+  const bullPower = liveReady ? Number(live.bull) || 0 : 0;
+  const bearPower = liveReady ? Number(live.bear) || 0 : 0;
+  const edge = bullPower - bearPower;
+  const active = opportunity !== "wait";
+  const strength = Math.min(1,Math.abs(edge)/4);
+  arena.style.setProperty("--bear-step", (active ? edge < 0 ? -4-6*strength : 5*strength : -0.5).toFixed(1)+"px");
+  arena.style.setProperty("--bull-step", (active ? edge > 0 ? 4+6*strength : -5*strength : 0.5).toFixed(1)+"px");
+  arena.style.setProperty("--bear-tilt", active && edge < 0 ? "-2deg" : "-0.2deg");
+  arena.style.setProperty("--bull-tilt", active && edge > 0 ? "2deg" : "0.2deg");
   setText("entryAction", view.regularHours && !fresh ? "WAIT — Data not current" : view.action.title);
   setText("entryActionDetail", view.regularHours && !fresh ? "Entry cues are paused until fresh prices and candles return." : view.action.detail);
   setText("actionContext", "NEW ENTRY");
