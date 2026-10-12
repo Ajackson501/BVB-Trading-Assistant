@@ -8837,7 +8837,7 @@ app.get("/research", authorizeResearchPage, (req, res) => {
     table{width:100%;border-collapse:collapse;background:#0e141d;border:1px solid #283342;border-radius:10px;overflow:hidden;margin-bottom:18px}th,td{padding:8px;border-bottom:1px solid #202a37;text-align:left;font-size:12px}th{color:#aeb9c8;background:#121a25}.pos{color:#73d99a}.neg{color:#ff7b86}.note{color:#8f9bad;font-size:11px;margin:8px 0 18px}.scroll{overflow-x:auto}
     @media(max-width:700px){body{padding:10px}th,td{padding:6px;font-size:11px}}
   </style></head><body><div class="wrap"><h1>Research</h1><div class="sub">Paper trades • For testing only — not your trades and no brokerage orders</div>
-  <div class="bar"><form method="get"><select name="date" onchange="this.form.submit()">${options}</select></form><a class="btn" href="/paper-study/export.csv?date=${encodeURIComponent(dateKey)}">Export CSV</a><a class="btn" href="/research/timing?date=${encodeURIComponent(dateKey)}">Analysis Timing</a><a class="btn" href="/oliver-dashboard">Back to dashboard</a><a class="btn" href="/research-logout">Sign out</a></div>
+  <div class="bar"><form method="get"><select name="date" onchange="this.form.submit()">${options}</select></form><a class="btn" href="/paper-study/export.csv?date=${encodeURIComponent(dateKey)}">Export CSV</a><a class="btn" href="/research/timing?date=${encodeURIComponent(dateKey)}">Analysis Timing</a><a class="btn" href="/research/historical?date=2026-10-09">Historical Candles</a><a class="btn" href="/oliver-dashboard">Back to dashboard</a><a class="btn" href="/research-logout">Sign out</a></div>
   <div class="notice"><b>Journal:</b> ${escapeHtml(persistence.message)}<br><span>${escapeHtml(persistence.file)}</span></div>
   <h2>Daily summary — ${escapeHtml(dateKey)}</h2><div class="scroll"><table><thead><tr><th>Agent</th><th>Trades</th><th>Wins</th><th>Losses</th><th>Flat</th><th>Net GOOGL move</th><th>Open position</th></tr></thead><tbody>${rows}</tbody></table></div>
   <div class="note">Underlying GOOGL movement only; not option P/L and before costs. Open positions are shown only for the selected date.</div>
@@ -8845,6 +8845,100 @@ app.get("/research", authorizeResearchPage, (req, res) => {
   <div class="note">ALIGNED means the paper trade direction matched the completed 15-minute bias at entry. COUNTERTREND means it opposed the 15-minute bias. NEUTRAL includes mixed/building 15-minute conditions and legacy trades recorded before this tag existed.</div>
   <h2>Closed trades</h2><div class="scroll"><table><thead><tr><th>Agent</th><th>Side</th><th>Entry</th><th>Entry price</th><th>Exit</th><th>Exit price</th><th>Move</th><th>15M bias</th><th>15M alignment</th><th>Exit reason</th></tr></thead><tbody>${tradeRows || '<tr><td colspan="10">No closed trades recorded for this date.</td></tr>'}</tbody></table></div>
   </div></body></html>`);
+});
+
+
+// Research-only historical export. No additional live stream and no persistent storage.
+const HISTORICAL_SYMBOL = 'GOOGL';
+const HISTORICAL_TIMEFRAME = '2Min';
+const NY_CANDLE_CLOCK = new Intl.DateTimeFormat('en-US', {
+  timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit',
+  hour:'2-digit',minute:'2-digit',hourCycle:'h23'
+});
+function historicalNYParts(timestamp) {
+  const parts = Object.fromEntries(NY_CANDLE_CLOCK.formatToParts(new Date(timestamp))
+    .filter(x=>x.type!=='literal').map(x=>[x.type,x.value]));
+  return {date:`${parts.year}-${parts.month}-${parts.day}`,
+    minute:Number(parts.hour)*60+Number(parts.minute)};
+}
+function historicalValidDate(raw) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return false;
+  const d = new Date(raw+'T00:00:00Z');
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0,10)===raw &&
+    d.getTime()<=Date.now() && d.getTime()>=Date.now()-366*86400000;
+}
+async function retrieveHistoricalSession(date) {
+  if (!ALPACA_API_KEY || !ALPACA_SECRET_KEY) {
+    const e=new Error('Alpaca credentials are not configured on this server.');e.status=503;throw e;
+  }
+  // Wide UTC bounds; filter by the NY exchange clock to handle daylight savings.
+  const from=new Date(date+'T00:00:00Z');
+  const to=new Date(from.getTime()+86400000);
+  const rows=[];const seen=new Set();let pageToken=null;
+  for(let page=0;page<12;page++) {
+    const params=new URLSearchParams({timeframe:HISTORICAL_TIMEFRAME,
+      start:from.toISOString(),end:to.toISOString(),limit:'1000',feed:'iex',adjustment:'raw'});
+    if(pageToken)params.set('page_token',pageToken);
+    const upstream=await fetch('https://data.alpaca.markets/v2/stocks/GOOGL/bars?'+params.toString(),{
+      headers:{'APCA-API-KEY-ID':ALPACA_API_KEY,'APCA-API-SECRET-KEY':ALPACA_SECRET_KEY},
+      signal:AbortSignal.timeout(20000)
+    });
+    if(!upstream.ok){
+      const err=new Error('Alpaca historical request failed (HTTP '+upstream.status+').');
+      err.status=upstream.status===429?429:502;throw err;
+    }
+    const json=await upstream.json();
+    if(!Array.isArray(json.bars))throw new Error('Alpaca response did not include a bars array.');
+    for(const bar of json.bars){
+      const ny=historicalNYParts(bar.t);
+      if(ny.date!==date || ny.minute<570 || ny.minute>=960 || seen.has(bar.t))continue;
+      if(![bar.o,bar.h,bar.l,bar.c].every(x=>Number.isFinite(Number(x))))continue;
+      seen.add(bar.t);
+      rows.push({timestamp:bar.t,open:bar.o,high:bar.h,low:bar.l,close:bar.c,
+        volume:bar.v??'',trade_count:bar.n??''});
+    }
+    if(!json.next_page_token){pageToken=null;break;}
+    pageToken=json.next_page_token;
+    if(page===11)throw new Error('Alpaca pagination exceeded safety limit; export incomplete.');
+  }
+  rows.sort((a,b)=>Date.parse(a.timestamp)-Date.parse(b.timestamp));
+  const missing=[];
+  for(let minute=570;minute<960;minute+=2){
+    const exists=rows.some(r=>historicalNYParts(r.timestamp).minute===minute);
+    if(!exists){const h=String(Math.floor(minute/60)).padStart(2,'0');
+      const m=String(minute%60).padStart(2,'0');missing.push(h+':'+m+' ET');}
+  }
+  return {date,symbol:HISTORICAL_SYMBOL,timeframe:HISTORICAL_TIMEFRAME,feed:'iex',
+    expected_intervals:195,actual_bars:rows.length,missing_intervals:missing,rows};
+}
+app.get('/research/historical',authorizeResearchPage,async(req,res)=>{
+  const date=String(req.query.date||'2026-10-09');
+  if(!historicalValidDate(date))return res.status(400).type('text/plain').send('Invalid historical date.');
+  let status='Select Export CSV to request the session from Alpaca.';
+  let details='';
+  if(req.query.check==='1'){
+    try{const result=await retrieveHistoricalSession(date);
+      status=`${result.actual_bars} / ${result.expected_intervals} two-minute intervals returned (IEX).`;
+      details=`<p>Missing intervals: ${result.missing_intervals.length}. ${result.missing_intervals.length?escapeHtml(result.missing_intervals.join(', ')):'None detected.'}</p>`;
+    }catch(err){status='Retrieval failed: '+escapeHtml(err.message);}
+  }
+  res.type('html').send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Historical Candles</title><style>
+  body{background:#080c12;color:#eaf0f6;font-family:system-ui;margin:0;padding:18px}.wrap{max-width:760px;margin:auto}.panel{background:#121923;border:1px solid #344152;border-radius:12px;padding:20px}h1{margin-top:0}p{color:#c4cfda;line-height:1.5}label{display:block;margin:12px 0 6px}input,button,a.btn{padding:12px;border:1px solid #47586c;border-radius:8px;background:#0b1420;color:white;font-size:16px}button{background:#1a744c;cursor:pointer}a.btn{display:inline-block;text-decoration:none;margin-top:12px}.muted{font-size:12px;color:#aab6c5}</style></head><body><div class="wrap"><div class="panel"><h1>Historical Candles — Research</h1><p>GOOGL · Alpaca IEX · 2-minute regular-session bars · 9:30 AM–4 PM Eastern</p><form method="get"><label for="date">Trading date</label><input type="date" id="date" name="date" value="${escapeHtml(date)}" required><button type="submit" name="check" value="1">Check session</button></form><p>${status}</p>${details}<a class="btn" href="/research/historical/export.csv?date=${encodeURIComponent(date)}">Export Historical CSV</a><p class="muted">Only actual Alpaca bars are exported. Missing intervals are reported on Check session; no prices are fabricated. IEX differs from consolidated exchange charts. Requires existing Alpaca credentials. Does not modify live monitoring or paper agents.</p><a class="btn" href="/research">Back to Research</a></div></div></body></html>`);
+});
+app.get('/research/historical/export.csv',authorizeBVBEvents,async(req,res)=>{
+  const date=String(req.query.date||'');
+  if(!historicalValidDate(date))return res.status(400).json({error:'Invalid historical date'});
+  try{
+    const result=await retrieveHistoricalSession(date);
+    if(!result.rows.length)return res.status(404).json({error:'No regular-session IEX bars returned for this date.'});
+    const q=x=>'"'+String(x??'').replace(/"/g,'""')+'"';
+    const rows=[['timestamp_utc','open','high','low','close','volume','trade_count','symbol','feed','timeframe']];
+    for(const b of result.rows)rows.push([b.timestamp,b.open,b.high,b.low,b.close,b.volume,b.trade_count,'GOOGL','iex','2Min']);
+    res.set('Cache-Control','no-store');
+    res.set('Content-Disposition',`attachment; filename="GOOGL_${date}_2Min_IEX.csv"`);
+    res.type('text/csv').send(rows.map(r=>r.map(q).join(',')).join('\n')+'\n');
+  }catch(err){console.error('Historical export failed:',err.message);
+    res.status(err.status||502).json({error:err.message});}
 });
 
 app.get("/research/timing", authorizeResearchPage, (req, res) => {
