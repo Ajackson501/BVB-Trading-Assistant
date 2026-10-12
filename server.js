@@ -6449,6 +6449,19 @@ app.get(
 
 
 
+
+// V3.2.38: latest IEX trade from the SAME Alpaca WebSocket, never a new connection.
+app.get("/football-live-price", (req,res)=>{
+ res.set("Access-Control-Allow-Origin","*");
+ res.set("Cache-Control","no-store, max-age=0");
+ const t=latestGOOGLTrade;
+ const price=t?Number(t.price):NaN;
+ const ageMs=t?Date.now()-Date.parse(t.time):NaN;
+ const valid=Number.isFinite(price)&&price>0&&Number.isFinite(ageMs)&&ageMs>=-5000;
+ res.json({symbol:"GOOGL",feed:"IEX",serverTime:new Date().toISOString(),
+  streamStatus:alpacaStreamStatus,price:valid?price:null,
+  tradeTime:valid?t.time:null,ageMs:valid?ageMs:null,fresh:valid&&ageMs<=10000});
+});
 // V3.2.37: read-only public market candle bridge for Market Football.
 // Only finalized OHLCV bars; no Alpaca credentials, positions, paper trades or personal data.
 // Browser cross-origin access is allowed for this limited public-market-data endpoint only.
