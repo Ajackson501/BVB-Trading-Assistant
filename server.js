@@ -6448,6 +6448,36 @@ app.get(
 );
 
 
+
+// V3.2.37: read-only public market candle bridge for Market Football.
+// Only finalized OHLCV bars; no Alpaca credentials, positions, paper trades or personal data.
+// Browser cross-origin access is allowed for this limited public-market-data endpoint only.
+app.get("/football-live-candles", (req,res) => {
+  res.set("Access-Control-Allow-Origin","*");
+  res.set("Cache-Control","no-store, max-age=0");
+  const todayET = new Intl.DateTimeFormat("en-CA",{
+    timeZone:"America/New_York",year:"numeric",month:"2-digit",day:"2-digit"
+  }).format(new Date());
+  const session = completedCandles
+    .filter(c => {
+      if (!c || !Number.isFinite(Date.parse(c.time))) return false;
+      const dayET = new Intl.DateTimeFormat("en-CA",{
+        timeZone:"America/New_York",year:"numeric",month:"2-digit",day:"2-digit"
+      }).format(new Date(c.time));
+      const hhmm = new Intl.DateTimeFormat("en-GB",{
+        timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hour12:false
+      }).format(new Date(c.time));
+      return dayET===todayET && hhmm>="09:30" && hhmm<"16:00";
+    })
+    .slice(-195)
+    .map(c=>({t:c.time,o:c.open,h:c.high,l:c.low,c:c.close,v:c.volume||0}))
+    .filter(b=>[b.o,b.h,b.l,b.c].every(Number.isFinite));
+  res.json({symbol:"GOOGL",timeframe:"2Min",feed:"IEX",
+    source:"completed-candles-only",serverTime:new Date().toISOString(),
+    streamStatus:alpacaStreamStatus,historySeeded,
+    count:session.length,candles:session});
+});
+
 // ==================================================
 // ROOT STATUS
 // ==================================================
